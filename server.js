@@ -1,4 +1,4 @@
-require('dotenv').config(); 
+require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const crypto = require('crypto');
@@ -69,10 +69,15 @@ function validateDomain(req, res, next) {
   const origin  = (req.headers['origin']  || '').toLowerCase();
   const referer = (req.headers['referer'] || '').toLowerCase();
 
-  // Direct browser navigation has no origin/referer — allow it so you can
-  // still open the URL directly for testing. Remove this condition if you want
-  // to lock down 100% to the listed domains.
+  // Direct browser navigation sends no origin/referer — allow it.
   if (!origin && !referer) {
+    return next();
+  }
+
+  // Same-origin requests (e.g. filter form submits) carry a Referer pointing
+  // back at this server. Always allow those — they aren't cross-origin embeds.
+  const host = (req.headers['host'] || '').toLowerCase();
+  if (host && (origin.includes(host) || referer.includes(host))) {
     return next();
   }
 
@@ -166,7 +171,7 @@ async function handleHeatmap(req, res, report) {
 
     const [personnelResult, dataResult, deptResult] = await Promise.all(queries);
 
-    res.send(buildHeatmapHtml(report, req.params.name, personnelResult.rows, dataResult.rows, {
+    res.send(buildHeatmapHtml(report, personnelResult.rows, dataResult.rows, {
       start, end, personnelId, token: req.query.token || '',
       deptRows: deptResult ? deptResult.rows : null,
     }));
@@ -183,7 +188,7 @@ function isValidDate(str) {
 // ---------------------------------------------------------------------------
 // Heatmap HTML builder
 // ---------------------------------------------------------------------------
-function buildHeatmapHtml(report, reportKey, personnel, dataRows, { start, end, personnelId, token, deptRows }) {
+function buildHeatmapHtml(report, personnel, dataRows, { start, end, personnelId, token, deptRows }) {
   const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   // Build 24-hour × 7-day matrix (rows = hours 0–23, cols = Mon–Sun)
@@ -386,7 +391,7 @@ function buildHeatmapHtml(report, reportKey, personnel, dataRows, { start, end, 
   <p class="sub">${subtitle}</p>
   ${deptNote}
 
-  <form class="filters no-print" method="GET" action="/report/${esc(reportKey)}">
+  <form class="filters no-print" method="GET" action="">
     <input type="hidden" name="token" value="${esc(token)}">
     <div class="fg">
       <label>From</label>
@@ -462,8 +467,8 @@ async function handleFilteredTable(req, res, report) {
   const end   = isValidDate(req.query.end)   ? req.query.end   : defaultEnd;
 
   try {
-    const result = await pool.query(resolveQuery(report.dataQuery), [start, end]);
-    res.send(buildFilteredTableHtml(report, req.params.name, result.rows, {
+    const result = await pool.query(report.dataQuery, [start, end]);
+    res.send(buildFilteredTableHtml(report, result.rows, {
       start, end, token: req.query.token || '',
     }));
   } catch (err) {
@@ -472,7 +477,7 @@ async function handleFilteredTable(req, res, report) {
   }
 }
 
-function buildFilteredTableHtml(report, reportKey, rows, { start, end, token }) {
+function buildFilteredTableHtml(report, rows, { start, end, token }) {
   const deptTotal = rows.length > 0 ? parseInt(rows[0].dept_total) : 0;
 
   const tableRows = rows.map(row => {
@@ -573,7 +578,7 @@ function buildFilteredTableHtml(report, reportKey, rows, { start, end, token }) 
   <h1>${esc(report.title)}</h1>
   <p class="sub">${esc(start)} to ${esc(end)} &mdash; ${deptTotal} total department incident${deptTotal !== 1 ? 's' : ''}</p>
 
-  <form class="filters no-print" method="GET" action="/report/${esc(reportKey)}">
+  <form class="filters no-print" method="GET" action="">
     <input type="hidden" name="token" value="${esc(token)}">
     <div class="fg">
       <label>From</label>

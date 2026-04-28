@@ -81,7 +81,7 @@ module.exports = {
         AND ir.alarm_at <  ($2::date + interval '1 day')
       GROUP BY irp.personnel_id, irp.public_name, d.total
       ORDER BY incident_count DESC, irp.public_name
-    `,
+    `
   },
 
 };
