@@ -467,7 +467,7 @@ async function handleFilteredTable(req, res, report) {
   const end   = isValidDate(req.query.end)   ? req.query.end   : defaultEnd;
 
   try {
-    const result = await pool.query(report.dataQuery, [start, end]);
+    const result = await pool.query(resolveQuery(report.dataQuery), [start, end]);
     res.send(buildFilteredTableHtml(report, result.rows, {
       start, end, token: req.query.token || '',
     }));
