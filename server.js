@@ -173,12 +173,6 @@ async function handleHeatmap(req, res, report) {
 
     const [personnelResult, dataResult, deptResult] = await Promise.all(queries);
 
-    // --- TIMEZONE DIAGNOSTIC (remove once confirmed working) ---
-    console.log('[heatmap] REPORT_TIMEZONE env:', process.env.REPORT_TIMEZONE);
-    console.log('[heatmap] resolved dataQuery snippet:', resolveQuery(report.dataQuery).match(/AT TIME ZONE '[^']+'/g));
-    console.log('[heatmap] first 3 data rows:', JSON.stringify(dataResult.rows.slice(0, 3)));
-    // -----------------------------------------------------------
-
     res.send(buildHeatmapHtml(report, personnelResult.rows, dataResult.rows, {
       start, end, personnelId, token: req.query.token || '',
       deptRows: deptResult ? deptResult.rows : null,
