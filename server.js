@@ -19,9 +19,11 @@ const pool = new Pool({
   ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
 });
 
-// Replaces {{DB_NAME}} in SQL strings with the value from .env
+// Replaces {{DB_NAME}} and {{TIMEZONE}} in SQL strings with values from .env
 function resolveQuery(sql) {
-  return sql.replace(/\{\{DB_NAME\}\}/g, process.env.DB_NAME || '');
+  return sql
+    .replace(/\{\{DB_NAME\}\}/g,  process.env.DB_NAME        || '')
+    .replace(/\{\{TIMEZONE\}\}/g, process.env.REPORT_TIMEZONE || 'UTC');
 }
 
 // ---------------------------------------------------------------------------
@@ -714,6 +716,7 @@ app.listen(PORT, () => {
   Object.keys(reports).forEach(name =>
     console.log(`Report: http://localhost:${PORT}/report/${name}?token=<YOUR_TOKEN>`)
   );
+  console.log(`Report timezone: ${process.env.REPORT_TIMEZONE || 'UTC (REPORT_TIMEZONE not set in .env)'}`);
   if (allowedDomains.length > 0) {
     console.log(`Allowed domains: ${allowedDomains.join(', ')}`);
   } else {

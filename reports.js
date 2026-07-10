@@ -36,9 +36,9 @@ module.exports = {
     // for the department total view.
     dataQuery: `
       SELECT
-        EXTRACT(ISODOW FROM ir.alarm_at)::int AS day_num,
-        EXTRACT(HOUR  FROM ir.alarm_at)::int  AS hour,
-        COUNT(DISTINCT ir.id)::int            AS count
+        EXTRACT(ISODOW FROM (ir.alarm_at AT TIME ZONE '{{TIMEZONE}}'))::int AS day_num,
+        EXTRACT(HOUR  FROM (ir.alarm_at AT TIME ZONE '{{TIMEZONE}}'))::int  AS hour,
+        COUNT(DISTINCT ir.id)::int                                          AS count
       FROM {{DB_NAME}}.app.f_incident_report ir
       INNER JOIN {{DB_NAME}}.app.v_incident_report_personnel irp
           ON irp.incident_report_id = ir.id
@@ -46,8 +46,8 @@ module.exports = {
         AND ir.alarm_at <  ($2::date + interval '1 day')
         AND ($3::integer IS NULL OR irp.personnel_id = $3::integer)
       GROUP BY
-        EXTRACT(ISODOW FROM ir.alarm_at),
-        EXTRACT(HOUR  FROM ir.alarm_at)
+        EXTRACT(ISODOW FROM (ir.alarm_at AT TIME ZONE '{{TIMEZONE}}')),
+        EXTRACT(HOUR  FROM (ir.alarm_at AT TIME ZONE '{{TIMEZONE}}'))
       ORDER BY 1, 2
     `,
   },
