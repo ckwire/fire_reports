@@ -6,11 +6,17 @@
 // type: 'heatmap'                  — day-of-week × hour heatmap with filters
 // type: 'filtered-table'           — date-filtered table; `dataQuery` receives
 //                                    $1=start, $2=end
+//
+// category: matches an `id` in nav.js — controls which sidebar section the
+//           report appears under on the home page
+// description: short sentence shown on the home page report card
 // ---------------------------------------------------------------------------
 module.exports = {
 
   probationary_metrics: {
     title: 'Probationary Metrics',
+    category: 'personnel',
+    description: 'Track activity and progress for probationary members.',
     query: `
       -- TODO: replace with real query
       SELECT 'placeholder' AS metric, 0 AS value
@@ -19,6 +25,8 @@ module.exports = {
 
   response_by_day_hour: {
     title: 'Response by Day & Hour',
+    category: 'incidents',
+    description: 'Heatmap of incident frequency by day of week and hour of day, with personnel and date filters.',
     type: 'heatmap',
 
     // Populates the personnel filter dropdown.
@@ -54,6 +62,8 @@ module.exports = {
 
   response_by_personnel: {
     title: 'Response by Personnel',
+    category: 'personnel',
+    description: 'Incident response counts and percentage of department calls per member over a date range.',
     type: 'filtered-table',
 
     // $1 = start date (inclusive)

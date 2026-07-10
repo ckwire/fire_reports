@@ -3,6 +3,7 @@ const express = require('express');
 const { Pool } = require('pg');
 const crypto = require('crypto');
 const reports = require('./reports');
+const nav     = require('./nav');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -114,6 +115,16 @@ function securityHeaders(_req, res, next) {
 // ---------------------------------------------------------------------------
 // Report route — /report/:name?token=...
 // Report names and queries are defined in reports.js
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Home / landing page
+// ---------------------------------------------------------------------------
+app.get('/', securityHeaders, validateToken, validateDomain, (req, res) => {
+  res.send(buildHomeHtml(req.query.token || ''));
+});
+
+// ---------------------------------------------------------------------------
+// Report route — /report/:name?token=...
 // ---------------------------------------------------------------------------
 app.get('/report/:name', securityHeaders, validateToken, validateDomain, async (req, res) => {
   const report = reports[req.params.name];
@@ -635,6 +646,171 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Home page builder
+// ---------------------------------------------------------------------------
+function buildHomeHtml(token) {
+  const deptName = process.env.DEPT_NAME || 'Fire Department';
+
+  // Group reports by category
+  const grouped = {};
+  nav.forEach(cat => { grouped[cat.id] = []; });
+  Object.entries(reports).forEach(([key, report]) => {
+    const catId = (report.category || '').toLowerCase();
+    if (grouped[catId]) grouped[catId].push({ key, ...report });
+  });
+
+  // Sidebar nav
+  const sidebarNav = nav.map(cat => {
+    const links = (grouped[cat.id] || []).map(r =>
+      `<a class="nav-link" href="report/${esc(r.key)}?token=${esc(token)}">${esc(r.title)}</a>`
+    ).join('');
+    return `<div class="nav-section">
+      <div class="nav-cat-label">${esc(cat.label)}</div>
+      ${links}
+    </div>`;
+  }).join('');
+
+  // Main content sections
+  const typeLabel = { heatmap: 'Heatmap', 'filtered-table': 'Filtered Table', table: 'Table' };
+  const sections = nav.map(cat => {
+    const catReports = grouped[cat.id] || [];
+    if (!catReports.length) return '';
+    const cards = catReports.map(r => `
+      <a class="report-card" href="report/${esc(r.key)}?token=${esc(token)}">
+        <div class="card-top">
+          <span class="card-title">${esc(r.title)}</span>
+          <span class="card-badge">${typeLabel[r.type] || 'Table'}</span>
+        </div>
+        <p class="card-desc">${esc(r.description || '')}</p>
+        <span class="card-cta">View Report &rarr;</span>
+      </a>`).join('');
+    return `<section class="cat-section">
+      <div class="cat-header">
+        <h2 class="cat-title">${esc(cat.label)}</h2>
+        <p class="cat-desc">${esc(cat.description)}</p>
+      </div>
+      <div class="cards">${cards}</div>
+    </section>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${esc(deptName)} &mdash; Reports</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      display: flex; min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5; color: #1a1a2e;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 232px; flex-shrink: 0; background: #1e3a5f;
+      display: flex; flex-direction: column;
+      position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    }
+    .sidebar-top {
+      display: flex; align-items: center; gap: 11px;
+      padding: 18px 14px; border-bottom: 1px solid rgba(255,255,255,.1);
+    }
+    .dept-badge {
+      width: 36px; height: 36px; border-radius: 8px;
+      background: #c0392b; color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: .95rem; flex-shrink: 0;
+    }
+    .dept-name { color: #fff; font-weight: 600; font-size: .88rem; line-height: 1.25; }
+    .dept-sub  { color: #7a9bbf; font-size: .7rem; margin-top: 2px; }
+
+    .sidebar-nav { padding: 10px 0 20px; }
+    .nav-section  { margin-top: 6px; }
+    .nav-cat-label {
+      color: #7a9bbf; font-size: .63rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .1em;
+      padding: 10px 14px 4px;
+    }
+    .nav-link {
+      display: block; text-decoration: none;
+      color: #b8cfe0; font-size: .83rem;
+      padding: 7px 14px 7px 22px;
+      border-left: 2px solid transparent;
+    }
+    .nav-link:hover {
+      color: #fff; background: rgba(255,255,255,.07);
+      border-left-color: #4a90d9;
+    }
+
+    /* ── Main ── */
+    .main { flex: 1; padding: 36px 40px; overflow-y: auto; }
+
+    .page-header { margin-bottom: 36px; }
+    .page-header h1 { font-size: 1.55rem; font-weight: 600; }
+    .page-header p  { color: #666; margin-top: 6px; font-size: .9rem; }
+
+    .cat-section  { margin-bottom: 44px; }
+    .cat-header   { margin-bottom: 16px; padding-bottom: 10px; border-bottom: 2px solid #e2e5ea; }
+    .cat-title    { font-size: 1.05rem; font-weight: 600; color: #1e3a5f; }
+    .cat-desc     { font-size: .8rem; color: #777; margin-top: 3px; }
+
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+
+    .report-card {
+      display: flex; flex-direction: column;
+      background: #fff; border-radius: 8px; padding: 18px 20px;
+      text-decoration: none; color: inherit;
+      border: 1px solid #e4e7eb;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+      transition: box-shadow .15s, border-color .15s, transform .15s;
+    }
+    .report-card:hover {
+      box-shadow: 0 4px 14px rgba(0,0,0,.11);
+      border-color: #4a90d9; transform: translateY(-2px);
+    }
+    .card-top {
+      display: flex; align-items: flex-start;
+      justify-content: space-between; gap: 8px; margin-bottom: 8px;
+    }
+    .card-title { font-weight: 600; font-size: .93rem; }
+    .card-badge {
+      font-size: .62rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .04em; white-space: nowrap; flex-shrink: 0;
+      color: #2a6db5; background: #eef4fb;
+      padding: 2px 8px; border-radius: 10px;
+    }
+    .card-desc { font-size: .82rem; color: #666; line-height: 1.5; flex: 1; }
+    .card-cta  { font-size: .78rem; color: #4a90d9; font-weight: 600; margin-top: 14px; }
+  </style>
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="sidebar-top">
+      <div class="dept-badge">FR</div>
+      <div>
+        <div class="dept-name">${esc(deptName)}</div>
+        <div class="dept-sub">Reports Dashboard</div>
+      </div>
+    </div>
+    <div class="sidebar-nav">${sidebarNav}</div>
+  </nav>
+
+  <main class="main">
+    <header class="page-header">
+      <h1>Reports Dashboard</h1>
+      <p>Select a report from the menu or choose a category below.</p>
+    </header>
+    ${sections}
+  </main>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
 // HTML builder — pure server-side, no frontend framework needed
 // ---------------------------------------------------------------------------
 function buildReportHtml(title, columns, rows) {
@@ -713,6 +889,7 @@ function esc(str) {
 // ---------------------------------------------------------------------------
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`Home:   http://localhost:${PORT}/?token=<YOUR_TOKEN>`);
   Object.keys(reports).forEach(name =>
     console.log(`Report: http://localhost:${PORT}/report/${name}?token=<YOUR_TOKEN>`)
   );
