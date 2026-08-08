@@ -140,16 +140,19 @@ module.exports = {
         COUNT(DISTINCT ir.id)::int                                          AS incident_count,
         ROUND(COUNT(DISTINCT ir.id)::numeric / NULLIF(d.total, 0) * 100, 1) AS pct_of_dept,
         d.total::int                                                        AS dept_total,
-        COALESCE(t.training_hours, 0)                                      AS training_hours,
-        COALESCE(t.inhouse_hours,  0)                                      AS inhouse_hours
+        COALESCE(t.training_hours, 0)                                                          AS training_hours,
+        COALESCE(t.inhouse_hours,  0)                                                          AS inhouse_hours,
+        ROUND(COALESCE(t.inhouse_hours, 0) / NULLIF(ia.total_hours, 0) * 100, 1)              AS pct_of_inhouse,
+        ia.total_hours                                                                         AS inhouse_avail_hours
       FROM {{DB_NAME}}.app.f_incident_report ir
       INNER JOIN {{DB_NAME}}.app.v_incident_report_personnel irp
           ON irp.incident_report_id = ir.id
       CROSS JOIN dept d
+      CROSS JOIN inhouse_avail ia
       LEFT JOIN training t ON t.personnel_id = irp.personnel_id
       WHERE ir.alarm_at >= $1::date
         AND ir.alarm_at <  ($2::date + interval '1 day')
-      GROUP BY irp.personnel_id, irp.public_name, d.total, t.training_hours, t.inhouse_hours
+      GROUP BY irp.personnel_id, irp.public_name, d.total, t.training_hours, t.inhouse_hours, ia.total_hours
       ORDER BY incident_count DESC, irp.public_name
     `
   },
