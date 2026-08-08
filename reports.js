@@ -112,6 +112,15 @@ module.exports = {
         WHERE ir.alarm_at >= $1::date
           AND ir.alarm_at <  ($2::date + interval '1 day')
       ),
+      inhouse_avail AS (
+        -- Total hours of in-house classes offered in the range — the denominator
+        -- for each member's in-house attendance percentage.
+        SELECT COALESCE(SUM(duration_hours), 0) AS total_hours
+        FROM {{DB_NAME}}.app.v_training_class
+        WHERE start_date >= $1::date
+          AND start_date <= $2::date
+          AND 47174 = ANY(training_type_ids)
+      ),
       training AS (
         SELECT
           p.personnel_id,
