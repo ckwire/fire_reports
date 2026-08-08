@@ -112,49 +112,56 @@ module.exports = {
         WHERE ir.alarm_at >= $1::date
           AND ir.alarm_at <  ($2::date + interval '1 day')
       ),
-      inhouse_avail AS (
-        -- Total hours of in-house classes offered in the range — the denominator
-        -- for each member's in-house attendance percentage.
-        SELECT COALESCE(SUM(duration_hours), 0) AS total_hours
-        FROM {{DB_NAME}}.app.v_training_class
-        WHERE start_date >= $1::date
-          AND start_date <= $2::date
-          AND 47174 = ANY(training_type_ids)
-      ),
       training AS (
+        -- Training hours per member, filtered from each member's effective start
+        -- (the later of their department start date and the report start date).
         SELECT
           p.personnel_id,
-          COALESCE(SUM(tc.duration_hours), 0)                                              AS training_hours,
+          GREATEST(p.personnel_start_date::date, $1::date)                                     AS member_start,
+          COALESCE(SUM(tc.duration_hours), 0)                                                  AS training_hours,
           COALESCE(SUM(tc.duration_hours) FILTER (WHERE 47174 = ANY(tc.training_type_ids)), 0) AS inhouse_hours
         FROM {{DB_NAME}}.app.v_personnel p
         LEFT JOIN {{DB_NAME}}.app.v_training_class_attendee tca
             ON tca.user_id = p.id
         LEFT JOIN {{DB_NAME}}.app.v_training_class tc
             ON tc.id = tca.training_class_id
-           AND tc.start_date >= $1::date
+           AND tc.start_date >= GREATEST(p.personnel_start_date::date, $1::date)
            AND tc.start_date <= $2::date
-        GROUP BY p.personnel_id
+        GROUP BY p.personnel_id, p.personnel_start_date
       )
       SELECT
         irp.public_name,
-        COUNT(DISTINCT ir.id)::int                                          AS incident_count,
-        ROUND(COUNT(DISTINCT ir.id)::numeric / NULLIF(d.total, 0) * 100, 1) AS pct_of_dept,
-        d.total::int                                                        AS dept_total,
-        COALESCE(t.training_hours, 0)                                                          AS training_hours,
-        COALESCE(t.inhouse_hours,  0)                                                          AS inhouse_hours,
-        ROUND(COALESCE(t.inhouse_hours, 0) / NULLIF(ia.total_hours, 0) * 100, 1)              AS pct_of_inhouse,
-        ia.total_hours                                                                         AS inhouse_avail_hours
+        COUNT(DISTINCT ir.id)::int                                                             AS incident_count,
+        avail_inc.cnt::int                                                                     AS available_incidents,
+        ROUND(COUNT(DISTINCT ir.id)::numeric / NULLIF(avail_inc.cnt, 0) * 100, 1)             AS pct_of_dept,
+        d.total::int                                                                           AS dept_total,
+        COALESCE(t.training_hours, 0)                                                         AS training_hours,
+        COALESCE(t.inhouse_hours,  0)                                                         AS inhouse_hours,
+        avail_ih.hrs                                                                           AS inhouse_avail_hours,
+        ROUND(COALESCE(t.inhouse_hours, 0) / NULLIF(avail_ih.hrs, 0) * 100, 1)               AS pct_of_inhouse
       FROM {{DB_NAME}}.app.f_incident_report ir
       INNER JOIN {{DB_NAME}}.app.v_incident_report_personnel irp
           ON irp.incident_report_id = ir.id
       INNER JOIN {{DB_NAME}}.app.v_personnel p
           ON p.personnel_id = irp.personnel_id AND p.personnel_is_active = true
       CROSS JOIN dept d
-      CROSS JOIN inhouse_avail ia
       LEFT JOIN training t ON t.personnel_id = irp.personnel_id
+      CROSS JOIN LATERAL (
+        SELECT COUNT(DISTINCT ir2.id) AS cnt
+        FROM {{DB_NAME}}.app.f_incident_report ir2
+        WHERE ir2.alarm_at >= COALESCE(t.member_start, $1::date)
+          AND ir2.alarm_at <  ($2::date + interval '1 day')
+      ) avail_inc
+      CROSS JOIN LATERAL (
+        SELECT COALESCE(SUM(tc2.duration_hours), 0) AS hrs
+        FROM {{DB_NAME}}.app.v_training_class tc2
+        WHERE tc2.start_date >= COALESCE(t.member_start, $1::date)
+          AND tc2.start_date <= $2::date
+          AND 47174 = ANY(tc2.training_type_ids)
+      ) avail_ih
       WHERE ir.alarm_at >= $1::date
         AND ir.alarm_at <  ($2::date + interval '1 day')
-      GROUP BY irp.personnel_id, irp.public_name, d.total, t.training_hours, t.inhouse_hours, ia.total_hours
+      GROUP BY irp.personnel_id, irp.public_name, d.total, t.training_hours, t.inhouse_hours, avail_inc.cnt, avail_ih.hrs
       ORDER BY incident_count DESC, irp.public_name
     `
   },

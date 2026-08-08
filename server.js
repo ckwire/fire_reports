@@ -847,6 +847,8 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
     }
     thead th:hover { background: #2a5080; }
     thead th.num-h { text-align: right; }
+    .sub { font-size: .85rem; color: #555; margin: 4px 0 6px; }
+    .tenure-note { font-size: .78rem; color: #777; margin-bottom: 18px; font-style: italic; }
     .sort-icon { opacity: .5; margin-left: 4px; font-size: .7rem; }
     th.asc  .sort-icon::after { content: '▲'; opacity: 1; }
     th.desc .sort-icon::after { content: '▼'; opacity: 1; }
@@ -883,6 +885,7 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
   ${tb.html}
   <h1>${esc(report.title)}</h1>
   <p class="sub">${esc(start)} to ${esc(end)} &mdash; ${deptTotal} total department incident${deptTotal !== 1 ? 's' : ''}</p>
+  <p class="tenure-note no-print">Percentages are tenure-adjusted &mdash; new members are compared against calls and training available after their department start date.</p>
 
   <form class="filters no-print" method="GET" action="">
     <input type="hidden" name="token" value="${esc(token)}">
@@ -904,10 +907,10 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
         <tr>
           <th data-sort="name">Personnel <span class="sort-icon"></span></th>
           <th data-sort="count" class="num-h">Incidents <span class="sort-icon"></span></th>
-          <th data-sort="pct">% of Dept Calls <span class="sort-icon"></span></th>
+          <th data-sort="pct">% of Avail. Calls <span class="sort-icon"></span></th>
           <th data-sort="hours" class="num-h">Training Hrs <span class="sort-icon"></span></th>
           <th data-sort="inhours" class="num-h">In-House Hrs <span class="sort-icon"></span></th>
-          <th data-sort="inpct">% of In-House <span class="sort-icon"></span></th>
+          <th data-sort="inpct">% of Avail. In-House <span class="sort-icon"></span></th>
         </tr>
       </thead>
       <tbody>${tableRows}</tbody>
