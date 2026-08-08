@@ -60,6 +60,40 @@ module.exports = {
     `,
   },
 
+  training_matrix: {
+    title: 'Training Matrix',
+    category: 'personnel',
+    description: 'Yes/no attendance matrix for in-house training classes — spot who is engaging with the new training format.',
+    type: 'matrix',
+
+    // $1 = start date (inclusive)  $2 = end date (inclusive)
+    classQuery: `
+      SELECT id, name, start_date::date AS class_date
+      FROM {{DB_NAME}}.app.v_training_class
+      WHERE start_date >= $1::date
+        AND start_date <= $2::date
+        AND 47174 = ANY(training_type_ids)
+      ORDER BY start_date, name
+    `,
+
+    // Active members only — pulled from v_personnel so firefighters with
+    // zero in-house attendances still appear as (empty) rows in the matrix.
+    rosterQuery: `
+      SELECT id AS user_id, personnel_full_name
+      FROM {{DB_NAME}}.app.v_personnel
+      WHERE personnel_is_active = true
+      ORDER BY personnel_full_name
+    `,
+
+    // $1 = integer[] of class IDs returned by classQuery.
+    // Matches on user_id (integer) so name-format differences don't break lookups.
+    attendanceQuery: `
+      SELECT DISTINCT user_id, training_class_id
+      FROM {{DB_NAME}}.app.v_training_class_attendee
+      WHERE training_class_id = ANY($1::integer[])
+    `,
+  },
+
   response_by_personnel: {
     title: 'Response by Personnel',
     category: 'personnel',
@@ -77,19 +111,36 @@ module.exports = {
         FROM {{DB_NAME}}.app.f_incident_report ir
         WHERE ir.alarm_at >= $1::date
           AND ir.alarm_at <  ($2::date + interval '1 day')
+      ),
+      training AS (
+        SELECT
+          p.personnel_id,
+          COALESCE(SUM(tc.duration_hours), 0)                                              AS training_hours,
+          COALESCE(SUM(tc.duration_hours) FILTER (WHERE 47174 = ANY(tc.training_type_ids)), 0) AS inhouse_hours
+        FROM {{DB_NAME}}.app.v_personnel p
+        LEFT JOIN {{DB_NAME}}.app.v_training_class_attendee tca
+            ON tca.user_id = p.id
+        LEFT JOIN {{DB_NAME}}.app.v_training_class tc
+            ON tc.id = tca.training_class_id
+           AND tc.start_date >= $1::date
+           AND tc.start_date <= $2::date
+        GROUP BY p.personnel_id
       )
       SELECT
         irp.public_name,
         COUNT(DISTINCT ir.id)::int                                          AS incident_count,
         ROUND(COUNT(DISTINCT ir.id)::numeric / NULLIF(d.total, 0) * 100, 1) AS pct_of_dept,
-        d.total::int                                                        AS dept_total
+        d.total::int                                                        AS dept_total,
+        COALESCE(t.training_hours, 0)                                      AS training_hours,
+        COALESCE(t.inhouse_hours,  0)                                      AS inhouse_hours
       FROM {{DB_NAME}}.app.f_incident_report ir
       INNER JOIN {{DB_NAME}}.app.v_incident_report_personnel irp
           ON irp.incident_report_id = ir.id
       CROSS JOIN dept d
+      LEFT JOIN training t ON t.personnel_id = irp.personnel_id
       WHERE ir.alarm_at >= $1::date
         AND ir.alarm_at <  ($2::date + interval '1 day')
-      GROUP BY irp.personnel_id, irp.public_name, d.total
+      GROUP BY irp.personnel_id, irp.public_name, d.total, t.training_hours, t.inhouse_hours
       ORDER BY incident_count DESC, irp.public_name
     `
   },

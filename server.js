@@ -141,12 +141,16 @@ app.get('/report/:name', securityHeaders, validateToken, validateDomain, async (
     return handleFilteredTable(req, res, report);
   }
 
+  if (report.type === 'matrix') {
+    return handleMatrix(req, res, report);
+  }
+
   try {
     const result  = await pool.query(resolveQuery(report.query));
     const rows    = result.rows;
     const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
 
-    res.send(buildReportHtml(report.title, columns, rows));
+    res.send(buildReportHtml(report.title, columns, rows, req.query.token || ''));
   } catch (err) {
     console.error(`Database error for report "${req.params.name}":`, err.message);
     res.status(500).send('Error loading report data. Check server logs.');
@@ -294,6 +298,7 @@ function buildHeatmapHtml(report, personnel, dataRows, { start, end, personnelId
     ? `<p class="dept-note no-print">Cells show <strong>responses / dept calls</strong>. Blank = no dept calls that hour.</p>`
     : '';
 
+  const tb = topbar(token);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -302,6 +307,7 @@ function buildHeatmapHtml(report, personnel, dataRows, { start, end, personnelId
   <title>${esc(report.title)}</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    ${tb.css}
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #f0f2f5; color: #1a1a2e; padding: 22px 18px;
@@ -400,6 +406,7 @@ function buildHeatmapHtml(report, personnel, dataRows, { start, end, personnelId
   </style>
 </head>
 <body>
+  ${tb.html}
   <h1>${esc(report.title)}</h1>
   <p class="sub">${subtitle}</p>
   ${deptNote}
@@ -490,24 +497,76 @@ async function handleFilteredTable(req, res, report) {
   }
 }
 
-function buildFilteredTableHtml(report, rows, { start, end, token }) {
-  const deptTotal = rows.length > 0 ? parseInt(rows[0].dept_total) : 0;
+// ---------------------------------------------------------------------------
+// Matrix report handler
+// ---------------------------------------------------------------------------
+async function handleMatrix(req, res, report) {
+  const today        = new Date();
+  const defaultStart = `${today.getFullYear()}-01-01`;
+  const defaultEnd   = today.toISOString().split('T')[0];
 
-  const tableRows = rows.map(row => {
-    const count = parseInt(row.incident_count);
-    const pct   = parseFloat(row.pct_of_dept);
-    return `<tr data-name="${esc(row.public_name)}" data-count="${count}" data-pct="${pct}">
-      <td class="name-cell">${esc(row.public_name)}</td>
-      <td class="num-cell">${count}</td>
-      <td class="pct-cell">
-        <div class="bar-wrap">
-          <div class="bar" style="width:${Math.min(pct, 100)}%"></div>
-          <span class="pct-lbl">${pct}%</span>
-        </div>
-      </td>
-    </tr>`;
+  const start = isValidDate(req.query.start) ? req.query.start : defaultStart;
+  const end   = isValidDate(req.query.end)   ? req.query.end   : defaultEnd;
+
+  try {
+    const [classResult, rosterResult] = await Promise.all([
+      pool.query(resolveQuery(report.classQuery),  [start, end]),
+      pool.query(resolveQuery(report.rosterQuery)),
+    ]);
+
+    const classes = classResult.rows;
+    const roster  = rosterResult.rows;   // [{ user_id, personnel_full_name }]
+
+    let attendance = [];
+    if (classes.length > 0) {
+      const classIds = classes.map(c => c.id);
+      const attResult = await pool.query(resolveQuery(report.attendanceQuery), [classIds]);
+      attendance = attResult.rows;
+    }
+
+    res.send(buildMatrixHtml(report, classes, roster, attendance, {
+      start, end, token: req.query.token || '',
+    }));
+  } catch (err) {
+    console.error(`Matrix error for "${report.title}":`, err.message);
+    res.status(500).send('Error loading report data. Check server logs.');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Matrix HTML builder
+// ---------------------------------------------------------------------------
+function buildMatrixHtml(report, classes, roster, attendance, { start, end, token }) {
+  // Fast O(1) lookup keyed on integer IDs — avoids name-format mismatches.
+  const attended = new Set(attendance.map(a => `${a.training_class_id}:${a.user_id}`));
+
+  const fmtDate = d => {
+    const dt = d instanceof Date ? d : new Date(d);
+    return dt.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', timeZone: 'UTC' });
+  };
+
+  const classHeaders = classes.map(c =>
+    `<th class="col-head"><span class="ch-name">${esc(c.name)}</span><span class="ch-date">${fmtDate(c.class_date)}</span></th>`
+  ).join('');
+
+  const colTotals = classes.map(c =>
+    roster.filter(({ user_id }) => attended.has(`${c.id}:${user_id}`)).length
+  );
+  const grandTotal   = colTotals.reduce((a, b) => a + b, 0);
+  const colTotalCells = colTotals.map(t => `<td class="total-cell">${t}</td>`).join('');
+
+  const dataRows = roster.map(({ user_id, personnel_full_name }) => {
+    let rowTotal = 0;
+    const cells = classes.map(c => {
+      if (attended.has(`${c.id}:${user_id}`)) { rowTotal++; return `<td class="att-yes">X</td>`; }
+      return `<td class="att-no"></td>`;
+    }).join('');
+    return `<tr><td class="name-cell sticky-col">${esc(personnel_full_name)}</td>${cells}<td class="total-cell">${rowTotal}</td></tr>`;
   }).join('');
 
+  const subtitle = `In-house trainings &mdash; ${esc(start)} to ${esc(end)} &mdash; ${classes.length} class${classes.length !== 1 ? 'es' : ''}, ${roster.length} firefighter${roster.length !== 1 ? 's' : ''}`;
+
+  const tb = topbar(token);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -516,6 +575,232 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
   <title>${esc(report.title)}</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    ${tb.css}
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5; color: #1a1a2e; padding: 22px 18px;
+    }
+    h1   { font-size: 1.3rem; font-weight: 600; }
+    .sub { font-size: .85rem; color: #555; margin: 4px 0 18px; }
+
+    /* Filters */
+    .filters {
+      display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
+      background: #fff; border-radius: 8px; padding: 14px 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 20px;
+    }
+    .fg { display: flex; flex-direction: column; gap: 4px; }
+    .fg label { font-size: .75rem; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: .04em; }
+    .fg input {
+      border: 1px solid #d1d5db; border-radius: 5px;
+      padding: 6px 10px; font-size: .87rem; background: #fff; height: 34px;
+    }
+    button {
+      height: 34px; padding: 0 18px; background: #1e3a5f; color: #fff;
+      border: none; border-radius: 5px; font-size: .87rem;
+      cursor: pointer; align-self: flex-end;
+    }
+    button:hover { background: #2a5080; }
+    .btn-print { background: #4a5568; margin-left: auto; }
+    .btn-print:hover { background: #2d3748; }
+
+    /* Matrix table — border-separate so sticky first column works */
+    .mw { overflow-x: auto; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+    table.mx { border-collapse: separate; border-spacing: 0; background: #fff; }
+
+    /* Sticky name column */
+    .sticky-col { position: sticky; left: 0; z-index: 1; background: #fff; }
+    thead .sticky-col { z-index: 2; background: #1e3a5f; }
+
+    /* Name column header */
+    .name-head {
+      background: #1e3a5f; color: #fff;
+      padding: 10px 16px; text-align: left;
+      font-size: .75rem; text-transform: uppercase; letter-spacing: .05em;
+      vertical-align: bottom; white-space: nowrap; min-width: 180px;
+      border-right: 2px solid rgba(255,255,255,.2);
+    }
+
+    /* Rotated class column headers — writing-mode makes the th rotate;
+       display:block on the inner spans creates two side-by-side "columns"
+       in the vertical writing mode, which appear as two stacked lines
+       after the 180deg rotation. */
+    .col-head {
+      background: #1e3a5f;
+      writing-mode: vertical-lr;
+      transform: rotate(180deg);
+      white-space: nowrap;
+      padding: 10px 6px;
+      border-left: 1px solid rgba(255,255,255,.12);
+      height: 150px; min-width: 34px;
+      vertical-align: top;
+    }
+    .ch-name {
+      display: block;
+      color: #fff; font-size: .72rem; font-weight: 600;
+    }
+    .ch-date {
+      display: block;
+      color: #91adc9; font-size: .62rem; font-weight: 400;
+      margin-left: 4px;
+    }
+
+    /* Data cells */
+    .name-cell {
+      padding: 5px 16px; font-size: .82rem; font-weight: 500;
+      white-space: nowrap; border-right: 2px solid #e2e5ea;
+      border-bottom: 1px solid #eef0f3;
+    }
+    tbody tr:hover .name-cell { background: #f7f9fc; }
+    .att-yes {
+      text-align: center; vertical-align: middle;
+      font-size: .8rem; font-weight: 700; color: #276221;
+      background: #c6efce; border-bottom: 1px solid #eef0f3;
+      border-left: 1px solid #eef0f3; padding: 3px;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    .att-no { border-bottom: 1px solid #eef0f3; border-left: 1px solid #eef0f3; }
+    /* Totals column header */
+    .total-head {
+      background: #1e3a5f; color: #fff;
+      padding: 10px 12px; font-size: .72rem; font-weight: 700;
+      border-left: 2px solid rgba(255,255,255,.3);
+      vertical-align: bottom; text-align: center; white-space: nowrap;
+    }
+    /* Totals cells — right column (row totals) and bottom row (col totals) */
+    .total-cell {
+      text-align: center; font-weight: 700; font-size: .82rem;
+      background: #eef0f3; color: #333;
+      border-left: 2px solid #d0d4da;
+      border-bottom: 1px solid #eef0f3;
+      padding: 5px 10px;
+    }
+    /* Footer row */
+    .total-label {
+      font-size: .82rem; font-weight: 700;
+      padding: 5px 16px; background: #e9ecef;
+      border-right: 2px solid #e2e5ea;
+      border-top: 2px solid #c0c8d4;
+    }
+    tfoot .total-cell {
+      background: #e9ecef; border-top: 2px solid #c0c8d4;
+    }
+    .grand-total {
+      background: #1e3a5f; color: #fff;
+      text-align: center; font-weight: 700; font-size: .88rem;
+      padding: 5px 10px;
+      border-left: 2px solid rgba(255,255,255,.3);
+      border-top: 2px solid #c0c8d4;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    .empty-msg {
+      background: #fff; border-radius: 8px; padding: 32px;
+      text-align: center; color: #888; font-size: .9rem;
+    }
+    .meta { margin-top: 12px; font-size: .75rem; color: #999; }
+
+    /* Print — landscape to accommodate many columns */
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff; padding: 0; }
+      h1   { font-size: .9rem; margin-bottom: 1px; }
+      .sub { font-size: .65rem; margin-bottom: 6px; }
+      .mw  { overflow: visible; box-shadow: none; border-radius: 0; }
+      table.mx { width: 100%; }
+      .name-head   { font-size: .62rem; min-width: 0; padding: 6px 8px; }
+      .name-cell   { font-size: .62rem; padding: 3px 8px; }
+      .col-head    { padding: 6px 4px; height: 100px; min-width: 22px; }
+      .ch-name     { font-size: .58rem; }
+      .ch-date     { font-size: .52rem; margin-left: 3px; }
+      .att-yes     { font-size: .62rem; }
+      .total-head  { font-size: .62rem; padding: 6px 6px; }
+      .total-cell  { font-size: .62rem; padding: 3px 6px; }
+      .total-label { font-size: .62rem; padding: 3px 8px; }
+      .grand-total { font-size: .65rem; padding: 3px 6px; }
+      .meta { font-size: .62rem; margin-top: 4px; }
+    }
+    @page { size: landscape; margin: 0.7cm; }
+  </style>
+</head>
+<body>
+  ${tb.html}
+  <h1>${esc(report.title)}</h1>
+  <p class="sub">${subtitle}</p>
+
+  <form class="filters no-print" method="GET" action="">
+    <input type="hidden" name="token" value="${esc(token)}">
+    <div class="fg">
+      <label>From</label>
+      <input type="date" name="start" value="${esc(start)}">
+    </div>
+    <div class="fg">
+      <label>To</label>
+      <input type="date" name="end" value="${esc(end)}">
+    </div>
+    <button type="submit">Apply</button>
+    <button type="button" class="btn-print no-print" onclick="window.print()">Print / Save PDF</button>
+  </form>
+
+  ${classes.length === 0
+    ? `<p class="empty-msg">No in-house training classes found for this date range.</p>`
+    : `<div class="mw">
+    <table class="mx">
+      <thead>
+        <tr>
+          <th class="name-head sticky-col">Firefighter</th>
+          ${classHeaders}
+          <th class="total-head">Total</th>
+        </tr>
+      </thead>
+      <tbody>${dataRows}</tbody>
+      <tfoot>
+        <tr>
+          <td class="total-label sticky-col">Total</td>
+          ${colTotalCells}
+          <td class="grand-total">${grandTotal}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  <p class="meta">${attendance.length} attendance record${attendance.length !== 1 ? 's' : ''} &mdash; generated ${new Date().toLocaleString()}</p>`
+  }
+</body>
+</html>`;
+}
+
+function buildFilteredTableHtml(report, rows, { start, end, token }) {
+  const deptTotal = rows.length > 0 ? parseInt(rows[0].dept_total) : 0;
+
+  const tableRows = rows.map(row => {
+    const count = parseInt(row.incident_count);
+    const pct   = parseFloat(row.pct_of_dept);
+    const hrs    = parseFloat(row.training_hours || 0);
+    const inhrs  = parseFloat(row.inhouse_hours  || 0);
+    const fmt    = n => n % 1 === 0 ? n.toFixed(0) : n.toFixed(1);
+    return `<tr data-name="${esc(row.public_name)}" data-count="${count}" data-pct="${pct}" data-hours="${hrs}" data-inhours="${inhrs}">
+      <td class="name-cell">${esc(row.public_name)}</td>
+      <td class="num-cell">${count}</td>
+      <td class="pct-cell">
+        <div class="bar-wrap">
+          <div class="bar" style="width:${Math.min(pct, 100)}%"></div>
+          <span class="pct-lbl">${pct}%</span>
+        </div>
+      </td>
+      <td class="num-cell">${fmt(hrs)}</td>
+      <td class="num-cell">${fmt(inhrs)}</td>
+    </tr>`;
+  }).join('');
+
+  const tb = topbar(token);
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${esc(report.title)}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    ${tb.css}
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #f0f2f5; color: #1a1a2e; padding: 22px 18px;
@@ -588,6 +873,7 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
   </style>
 </head>
 <body>
+  ${tb.html}
   <h1>${esc(report.title)}</h1>
   <p class="sub">${esc(start)} to ${esc(end)} &mdash; ${deptTotal} total department incident${deptTotal !== 1 ? 's' : ''}</p>
 
@@ -612,6 +898,8 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
           <th data-sort="name">Personnel <span class="sort-icon"></span></th>
           <th data-sort="count" class="num-h">Incidents <span class="sort-icon"></span></th>
           <th data-sort="pct">% of Dept Calls <span class="sort-icon"></span></th>
+          <th data-sort="hours" class="num-h">Training Hrs <span class="sort-icon"></span></th>
+          <th data-sort="inhours" class="num-h">In-House Hrs <span class="sort-icon"></span></th>
         </tr>
       </thead>
       <tbody>${tableRows}</tbody>
@@ -649,6 +937,32 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
 // ---------------------------------------------------------------------------
 // Home page builder
 // ---------------------------------------------------------------------------
+// Shared top nav bar rendered on every report page.
+// Uses negative margins to break out of the body's padding and span full width.
+function topbar(token, bodyPadding = '22px 18px') {
+  const deptName  = process.env.DEPT_NAME || 'Fire Department';
+  const [py, px]  = bodyPadding.split(' ');
+  return {
+    css: `
+    .topbar {
+      display: flex; align-items: center; gap: 12px;
+      background: #1e3a5f; padding: 9px ${px};
+      margin: -${py} -${px} ${py};
+      font-size: .82rem;
+    }
+    .tb-back { color: #b8cfe0; text-decoration: none; white-space: nowrap; }
+    .tb-back:hover { color: #fff; }
+    .tb-sep  { color: rgba(255,255,255,.2); }
+    .tb-dept { color: rgba(255,255,255,.6); font-size: .78rem; }
+    @media print { .topbar { display: none; } }`,
+    html: `<div class="topbar">
+      <a class="tb-back" href="../?token=${esc(token)}">&#8592; All Reports</a>
+      <span class="tb-sep">/</span>
+      <span class="tb-dept">${esc(deptName)}</span>
+    </div>`,
+  };
+}
+
 function buildHomeHtml(token) {
   const deptName = process.env.DEPT_NAME || 'Fire Department';
 
@@ -672,7 +986,7 @@ function buildHomeHtml(token) {
   }).join('');
 
   // Main content sections
-  const typeLabel = { heatmap: 'Heatmap', 'filtered-table': 'Filtered Table', table: 'Table' };
+  const typeLabel = { heatmap: 'Heatmap', 'filtered-table': 'Filtered Table', matrix: 'Matrix', table: 'Table' };
   const sections = nav.map(cat => {
     const catReports = grouped[cat.id] || [];
     if (!catReports.length) return '';
@@ -813,11 +1127,9 @@ function buildHomeHtml(token) {
 // ---------------------------------------------------------------------------
 // HTML builder — pure server-side, no frontend framework needed
 // ---------------------------------------------------------------------------
-function buildReportHtml(title, columns, rows) {
-  const headers = columns
-    .map(c => `<th>${esc(c)}</th>`)
-    .join('');
-
+function buildReportHtml(title, columns, rows, token = '') {
+  const tb = topbar(token, '28px 20px');
+  const headers = columns.map(c => `<th>${esc(c)}</th>`).join('');
   const body = rows.length > 0
     ? rows.map(row =>
         `<tr>${columns.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`
@@ -832,30 +1144,20 @@ function buildReportHtml(title, columns, rows) {
   <title>${esc(title)}</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    ${tb.css}
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #f0f2f5;
-      color: #1a1a2e;
-      padding: 28px 20px;
+      background: #f0f2f5; color: #1a1a2e; padding: 28px 20px;
     }
     h1 { font-size: 1.35rem; font-weight: 600; margin-bottom: 18px; }
     .wrap { overflow-x: auto; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
     table { width: 100%; border-collapse: collapse; background: #fff; }
     thead th {
-      background: #1e3a5f;
-      color: #fff;
-      text-align: left;
-      padding: 11px 16px;
-      font-size: .8rem;
-      text-transform: uppercase;
-      letter-spacing: .05em;
-      white-space: nowrap;
+      background: #1e3a5f; color: #fff; text-align: left;
+      padding: 11px 16px; font-size: .8rem;
+      text-transform: uppercase; letter-spacing: .05em; white-space: nowrap;
     }
-    tbody td {
-      padding: 9px 16px;
-      font-size: .88rem;
-      border-bottom: 1px solid #eef0f3;
-    }
+    tbody td { padding: 9px 16px; font-size: .88rem; border-bottom: 1px solid #eef0f3; }
     tbody tr:last-child td { border-bottom: none; }
     tbody tr:hover td { background: #f7f9fc; }
     td.empty { text-align: center; color: #888; padding: 24px; }
@@ -863,6 +1165,7 @@ function buildReportHtml(title, columns, rows) {
   </style>
 </head>
 <body>
+  ${tb.html}
   <h1>${esc(title)}</h1>
   <div class="wrap">
     <table>
