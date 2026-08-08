@@ -774,10 +774,11 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
   const tableRows = rows.map(row => {
     const count = parseInt(row.incident_count);
     const pct   = parseFloat(row.pct_of_dept);
-    const hrs    = parseFloat(row.training_hours || 0);
-    const inhrs  = parseFloat(row.inhouse_hours  || 0);
+    const hrs    = parseFloat(row.training_hours  || 0);
+    const inhrs  = parseFloat(row.inhouse_hours   || 0);
+    const inpct  = parseFloat(row.pct_of_inhouse  || 0);
     const fmt    = n => n % 1 === 0 ? n.toFixed(0) : n.toFixed(1);
-    return `<tr data-name="${esc(row.public_name)}" data-count="${count}" data-pct="${pct}" data-hours="${hrs}" data-inhours="${inhrs}">
+    return `<tr data-name="${esc(row.public_name)}" data-count="${count}" data-pct="${pct}" data-hours="${hrs}" data-inhours="${inhrs}" data-inpct="${inpct}">
       <td class="name-cell">${esc(row.public_name)}</td>
       <td class="num-cell">${count}</td>
       <td class="pct-cell">
@@ -788,6 +789,12 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
       </td>
       <td class="num-cell">${fmt(hrs)}</td>
       <td class="num-cell">${fmt(inhrs)}</td>
+      <td class="pct-cell">
+        <div class="bar-wrap">
+          <div class="bar" style="width:${Math.min(inpct, 100)}%"></div>
+          <span class="pct-lbl">${inpct}%</span>
+        </div>
+      </td>
     </tr>`;
   }).join('');
 
@@ -900,6 +907,7 @@ function buildFilteredTableHtml(report, rows, { start, end, token }) {
           <th data-sort="pct">% of Dept Calls <span class="sort-icon"></span></th>
           <th data-sort="hours" class="num-h">Training Hrs <span class="sort-icon"></span></th>
           <th data-sort="inhours" class="num-h">In-House Hrs <span class="sort-icon"></span></th>
+          <th data-sort="inpct">% of In-House <span class="sort-icon"></span></th>
         </tr>
       </thead>
       <tbody>${tableRows}</tbody>

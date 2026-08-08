@@ -147,6 +147,8 @@ module.exports = {
       FROM {{DB_NAME}}.app.f_incident_report ir
       INNER JOIN {{DB_NAME}}.app.v_incident_report_personnel irp
           ON irp.incident_report_id = ir.id
+      INNER JOIN {{DB_NAME}}.app.v_personnel p
+          ON p.personnel_id = irp.personnel_id AND p.personnel_is_active = true
       CROSS JOIN dept d
       CROSS JOIN inhouse_avail ia
       LEFT JOIN training t ON t.personnel_id = irp.personnel_id
