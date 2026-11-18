@@ -145,6 +145,10 @@ app.get('/report/:name', securityHeaders, validateToken, validateDomain, async (
     return handleMatrix(req, res, report);
   }
 
+  if (report.type === 'member-activity') {
+    return handleMemberActivity(req, res, report);
+  }
+
   try {
     const result  = await pool.query(resolveQuery(report.query));
     const rows    = result.rows;
@@ -531,6 +535,397 @@ async function handleMatrix(req, res, report) {
     console.error(`Matrix error for "${report.title}":`, err.message);
     res.status(500).send('Error loading report data. Check server logs.');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Member activity report handler — one member, incidents + training,
+// drill-down Year → Quarter → individual call/class.
+// ---------------------------------------------------------------------------
+async function handleMemberActivity(req, res, report) {
+  const today        = new Date();
+  const defaultStart = `${today.getFullYear() - 2}-01-01`;
+  const defaultEnd   = today.toISOString().split('T')[0];
+
+  const start = isValidDate(req.query.start) ? req.query.start : defaultStart;
+  const end   = isValidDate(req.query.end)   ? req.query.end   : defaultEnd;
+
+  let personnelId = null;
+  if (req.query.personnel_id) {
+    personnelId = parseInt(req.query.personnel_id, 10);
+    if (isNaN(personnelId)) return res.status(400).send('Invalid personnel_id.');
+  }
+
+  try {
+    const personnelResult = await pool.query(resolveQuery(report.personnelQuery));
+
+    let incidents = [], training = [], deptIncidents = [], deptTraining = [];
+    let memberStart = start;
+    if (personnelId !== null) {
+      const selected = personnelResult.rows.find(p => parseInt(p.personnel_id, 10) === personnelId);
+      // ISO date strings compare correctly as text
+      if (selected && selected.personnel_start && selected.personnel_start > start) {
+        memberStart = selected.personnel_start;
+      }
+
+      const [incResult, trResult, dIncResult, dTrResult] = await Promise.all([
+        pool.query(resolveQuery(report.incidentQuery), [start, end, personnelId]),
+        pool.query(resolveQuery(report.trainingQuery), [start, end, personnelId]),
+        pool.query(resolveQuery(report.deptIncidentQuery), [memberStart, end]),
+        pool.query(resolveQuery(report.deptTrainingQuery), [memberStart, end]),
+      ]);
+      incidents     = incResult.rows;
+      training      = trResult.rows;
+      deptIncidents = dIncResult.rows;
+      deptTraining  = dTrResult.rows;
+    }
+
+    res.send(buildMemberActivityHtml(report, personnelResult.rows, incidents, training, {
+      start, end, personnelId, token: req.query.token || '',
+      deptIncidents, deptTraining, memberStart,
+    }));
+  } catch (err) {
+    console.error(`Member activity error for "${report.title}":`, err.message);
+    res.status(500).send('Error loading report data. Check server logs.');
+  }
+}
+
+// Groups items (each with a `date` string beginning YYYY-MM-DD) into
+// Year → Quarter → items and renders nested <details> elements. Every quarter
+// in the date range is listed, including empty ones, so gaps are visible.
+// deptItems are the department-wide items for the same periods (denominators).
+// summarize(list, deptList) returns the HTML shown on each header line;
+// renderItem(item) returns the HTML for one expanded row.
+function buildPeriodTree(items, deptItems, start, end, { summarize, renderItem }) {
+  const byQuarter = new Map();   // "2024-3" -> items
+  const deptByQuarter = new Map();
+  const keys = new Set();
+
+  const startYM = parseInt(start.slice(0, 4), 10) * 12 + parseInt(start.slice(5, 7), 10);
+  const endYM   = parseInt(end.slice(0, 4), 10)   * 12 + parseInt(end.slice(5, 7), 10);
+  for (let y = parseInt(start.slice(0, 4), 10); y <= parseInt(end.slice(0, 4), 10); y++) {
+    for (let q = 1; q <= 4; q++) {
+      if (y * 12 + q * 3 >= startYM && y * 12 + (q - 1) * 3 + 1 <= endYM) keys.add(`${y}-${q}`);
+    }
+  }
+
+  // Timezone conversion can nudge an item just outside the range — keep it.
+  items.forEach(it => {
+    const key = `${it.date.slice(0, 4)}-${Math.ceil(parseInt(it.date.slice(5, 7), 10) / 3)}`;
+    keys.add(key);
+    if (!byQuarter.has(key)) byQuarter.set(key, []);
+    byQuarter.get(key).push(it);
+  });
+
+  // Department items only count toward periods already being shown.
+  deptItems.forEach(it => {
+    const key = `${it.date.slice(0, 4)}-${Math.ceil(parseInt(it.date.slice(5, 7), 10) / 3)}`;
+    if (!keys.has(key)) return;
+    if (!deptByQuarter.has(key)) deptByQuarter.set(key, []);
+    deptByQuarter.get(key).push(it);
+  });
+
+  const years = new Map();   // 2024 -> [q, q, ...]
+  [...keys]
+    .map(k => k.split('-').map(Number))
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    .forEach(([y, q]) => {
+      if (!years.has(y)) years.set(y, []);
+      years.get(y).push(q);
+    });
+
+  return [...years.entries()].map(([y, quarters]) => {
+    const yearItems = quarters.flatMap(q => byQuarter.get(`${y}-${q}`) || []);
+    const yearDept  = quarters.flatMap(q => deptByQuarter.get(`${y}-${q}`) || []);
+
+    const qHtml = quarters.map(q => {
+      const list = byQuarter.get(`${y}-${q}`) || [];
+      const dept = deptByQuarter.get(`${y}-${q}`) || [];
+      if (list.length === 0) {
+        return `<div class="pd-empty"><span class="pl">Q${q}</span><span class="ps zero">${summarize(list, dept)}</span></div>`;
+      }
+      return `<details class="pd pd-q">
+        <summary><span class="pl">Q${q}</span><span class="ps">${summarize(list, dept)}</span></summary>
+        <div class="items">${list.map(renderItem).join('')}</div>
+      </details>`;
+    }).join('');
+
+    return `<details class="pd pd-y"${yearItems.length > 0 ? ' open' : ''}>
+      <summary><span class="pl">${y}</span><span class="ps">${summarize(yearItems, yearDept)}</span></summary>
+      <div class="quarters">${qHtml}</div>
+    </details>`;
+  }).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Member activity HTML builder
+// ---------------------------------------------------------------------------
+function buildMemberActivityHtml(report, personnel, incidents, training, {
+  start, end, personnelId, token, deptIncidents = [], deptTraining = [], memberStart = start,
+}) {
+  const selected = personnelId !== null
+    ? personnel.find(p => parseInt(p.personnel_id, 10) === personnelId)
+    : null;
+
+  const fmtNum  = n => n % 1 === 0 ? n.toFixed(0) : n.toFixed(1);
+  const plural  = (n, word, pl = `${word}s`) => `${n} ${n === 1 ? word : pl}`;
+  const fmtDate = s => `${s.slice(5, 7)}/${s.slice(8, 10)}/${s.slice(0, 4)}`;
+
+  const optionFor = p => {
+    const id = parseInt(p.personnel_id, 10);
+    return `<option value="${id}"${id === personnelId ? ' selected' : ''}>${esc(String(p.personnel_full_name || ''))}</option>`;
+  };
+  const personnelOptions =
+    `<optgroup label="Active">${personnel.filter(p => p.personnel_is_active).map(optionFor).join('')}</optgroup>` +
+    `<optgroup label="Inactive">${personnel.filter(p => !p.personnel_is_active).map(optionFor).join('')}</optgroup>`;
+
+  // member / dept as a percentage; blank when the department had nothing
+  const pct = (n, d) => d > 0 ? `${(n / d * 100).toFixed(1)}%` : '';
+  const pctHtml = (n, d) => d > 0 ? `<span class="pct">${pct(n, d)}</span>` : '';
+
+  // --- Incidents ---
+  const incItems     = incidents.map(r => ({ ...r, date: r.alarm_local }));
+  // Drop incidents that the UTC→local conversion pushed outside the range so
+  // the header total always equals the sum of the periods shown.
+  const deptIncItems = deptIncidents
+    .map(r => ({ ...r, date: r.alarm_local }))
+    .filter(r => r.date.slice(0, 10) >= memberStart && r.date.slice(0, 10) <= end);
+  const incSummary = (list, dept) => dept.length === 0 && list.length === 0
+    ? 'None'
+    : `${list.length}<span class="of">/${dept.length}</span> ${pctHtml(list.length, dept.length)}`;
+  const incTree = buildPeriodTree(incItems, deptIncItems, start, end, {
+    summarize: incSummary,
+    renderItem: r => `<div class="it">
+      <span class="it-date">${esc(fmtDate(r.date))} <span class="it-time">${esc(r.date.slice(11, 16))}</span></span>
+      <span class="it-main">${esc(String(r.incident_type || 'Incident'))}${r.address ? `<span class="it-sub">${esc(String(r.address))}</span>` : ''}</span>
+      <span class="it-ref">${esc(String(r.incident_number || ''))}</span>
+    </div>`,
+  });
+
+  // --- Training ---
+  const trItems = training.map(r => ({ ...r, date: r.class_date, hours: parseFloat(r.duration_hours) || 0 }));
+  const sumHours = list => list.reduce((a, r) => a + r.hours, 0);
+  const deptTrItems = deptTraining.map(r => ({ ...r, date: r.class_date, hours: parseFloat(r.duration_hours) || 0 }));
+  // Percentage is hours attended ÷ department class hours held.
+  const trSummary = (list, dept) => dept.length === 0 && list.length === 0
+    ? 'None'
+    : `${list.length}<span class="of">/${dept.length}</span> classes <span class="dot">&middot;</span> ` +
+      `${fmtNum(sumHours(list))}<span class="of">/${fmtNum(sumHours(dept))}</span> hrs ${pctHtml(sumHours(list), sumHours(dept))}`;
+  const trTree = buildPeriodTree(trItems, deptTrItems, start, end, {
+    summarize: trSummary,
+    renderItem: r => `<div class="it">
+      <span class="it-date">${esc(fmtDate(r.date))}</span>
+      <span class="it-main">${esc(String(r.name || 'Training'))}${r.category_name ? `<span class="it-sub">${esc(String(r.category_name))}</span>` : ''}</span>
+      <span class="it-ref">${r.is_inhouse ? '<span class="tag">In-house</span> ' : ''}${fmtNum(r.hours)} hrs</span>
+    </div>`,
+  });
+
+  const inhouseHours = sumHours(trItems.filter(r => r.is_inhouse));
+
+  const subtitle = selected
+    ? `${esc(String(selected.personnel_full_name))} &mdash; ${esc(start)} to ${esc(end)}`
+    : 'Select a member to view their incidents and training';
+
+  const tb = topbar(token);
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${esc(report.title)}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    ${tb.css}
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5; color: #1a1a2e; padding: 22px 18px;
+    }
+    h1   { font-size: 1.3rem; font-weight: 600; }
+    .sub { font-size: .85rem; color: #555; margin: 4px 0 18px; }
+
+    /* Filters */
+    .filters {
+      display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
+      background: #fff; border-radius: 8px; padding: 14px 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 20px;
+    }
+    .fg { display: flex; flex-direction: column; gap: 4px; }
+    .fg label { font-size: .75rem; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: .04em; }
+    .fg input, .fg select {
+      border: 1px solid #d1d5db; border-radius: 5px;
+      padding: 6px 10px; font-size: .87rem; background: #fff; height: 34px;
+    }
+    .fg select { min-width: 220px; }
+    button {
+      height: 34px; padding: 0 18px; background: #1e3a5f; color: #fff;
+      border: none; border-radius: 5px; font-size: .87rem;
+      cursor: pointer; align-self: flex-end;
+    }
+    button:hover { background: #2a5080; }
+    .btn-print { background: #4a5568; margin-left: auto; }
+    .btn-print:hover { background: #2d3748; }
+    .btn-light { background: #fff; color: #1e3a5f; border: 1px solid #c5d0de; padding: 0 12px; }
+    .btn-light:hover { background: #eef4fb; }
+    .toolbar { display: flex; gap: 8px; margin-bottom: 14px; }
+
+    /* Category cards */
+    .cats { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 18px; align-items: start; }
+    .cat { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.12); overflow: hidden; }
+    .cat-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+      background: #1e3a5f; color: #fff; padding: 12px 16px;
+    }
+    .cat-head h2 { font-size: .95rem; font-weight: 600; }
+    .cat-total { font-size: .85rem; font-weight: 600; color: #cfe0f1; }
+    .cat-body { padding: 6px 0; }
+    .empty-msg {
+      background: #fff; border-radius: 8px; padding: 32px;
+      text-align: center; color: #888; font-size: .9rem;
+    }
+
+    /* Drill-down rows */
+    details.pd > summary, .pd-empty {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 9px 16px; cursor: pointer; list-style: none; user-select: none;
+      border-bottom: 1px solid #eef0f3;
+    }
+    details.pd > summary::-webkit-details-marker { display: none; }
+    details.pd > summary::before {
+      content: '\\25B8'; color: #7a9bbf; font-size: .8rem; margin-right: 8px; transition: transform .12s;
+    }
+    details.pd[open] > summary::before { transform: rotate(90deg); }
+    details.pd > summary:hover { background: #f7f9fc; }
+    .pl { font-weight: 600; flex: 1; }
+    .ps { font-size: .85rem; font-weight: 600; font-variant-numeric: tabular-nums; color: #1e3a5f; }
+    .ps.zero { color: #aaa; font-weight: 400; }
+    .dot { color: #aab8c9; margin: 0 3px; }
+    .of  { font-weight: 400; color: #8a9bb0; }
+    .pct {
+      display: inline-block; min-width: 46px; text-align: right;
+      font-weight: 700; color: #1e3a5f; margin-left: 4px;
+    }
+    .cat-total .of  { color: #9fb6cf; }
+    .cat-total .pct { color: #fff; }
+    .note { font-size: .78rem; color: #777; margin: -8px 0 14px; font-style: italic; }
+
+    .pd-y > summary { background: #f4f6f9; }
+    .pd-y > summary .pl { font-size: .95rem; }
+    .pd-q > summary, .pd-empty { padding-left: 34px; font-size: .88rem; }
+    .pd-q > summary .pl, .pd-empty .pl { font-weight: 500; }
+    .pd-empty { cursor: default; color: #888; }
+
+    .items { background: #fbfcfd; }
+    .it {
+      display: grid; grid-template-columns: 118px 1fr auto; gap: 12px; align-items: start;
+      padding: 7px 16px 7px 56px; border-bottom: 1px solid #eef0f3; font-size: .82rem;
+    }
+    .it:last-child { border-bottom: 1px solid #e2e5ea; }
+    .it-date { color: #555; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .it-time { color: #999; margin-left: 4px; }
+    .it-main { font-weight: 500; }
+    .it-sub  { display: block; font-weight: 400; color: #888; font-size: .76rem; margin-top: 1px; }
+    .it-ref  { color: #555; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+    .tag {
+      font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+      color: #2a6db5; background: #eef4fb; padding: 1px 7px; border-radius: 9px; margin-right: 4px;
+    }
+    .meta { margin-top: 12px; font-size: .75rem; color: #999; }
+
+    @media (max-width: 560px) {
+      .cats { grid-template-columns: 1fr; }
+      .it { grid-template-columns: 1fr auto; padding-left: 40px; }
+      .it-date { grid-column: 1 / -1; }
+    }
+
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff; padding: 0; }
+      h1   { font-size: .95rem; margin-bottom: 1px; }
+      .sub { font-size: .68rem; margin-bottom: 6px; }
+      .cats { display: block; }
+      .cat { box-shadow: none; border: 1px solid #ccc; margin-bottom: 12px; }
+      .cat-head { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .it { font-size: .7rem; padding-top: 3px; padding-bottom: 3px; }
+      .meta { font-size: .62rem; }
+    }
+    @page { size: portrait; margin: 0.7cm; }
+  </style>
+</head>
+<body>
+  ${tb.html}
+  <h1>${esc(report.title)}</h1>
+  <p class="sub">${subtitle}</p>
+
+  <form class="filters no-print" method="GET" action="">
+    <input type="hidden" name="token" value="${esc(token)}">
+    <div class="fg">
+      <label>Member</label>
+      <select name="personnel_id" required>
+        <option value="">Select a member…</option>
+        ${personnelOptions}
+      </select>
+    </div>
+    <div class="fg">
+      <label>From</label>
+      <input type="date" name="start" value="${esc(start)}">
+    </div>
+    <div class="fg">
+      <label>To</label>
+      <input type="date" name="end" value="${esc(end)}">
+    </div>
+    <button type="submit">Apply</button>
+    <button type="button" class="btn-print" onclick="window.print()">Print / Save PDF</button>
+  </form>
+
+  ${!selected
+    ? `<p class="empty-msg">Choose a member and date range, then press Apply.</p>`
+    : `<p class="note">Figures read <strong>member/department</strong> with the member&rsquo;s share. Percentages are tenure-adjusted${memberStart > start ? ` &mdash; department totals count from ${esc(memberStart)}, when this member started` : ''}. Training % is hours attended &divide; department class hours.</p>
+  <div class="toolbar no-print">
+    <button type="button" class="btn-light" id="expand-all">Expand all</button>
+    <button type="button" class="btn-light" id="collapse-all">Collapse all</button>
+  </div>
+
+  <div class="cats">
+    <section class="cat">
+      <div class="cat-head">
+        <h2>Incidents</h2>
+        <span class="cat-total">${incSummary(incItems, deptIncItems)} incidents</span>
+      </div>
+      <div class="cat-body">${incTree}</div>
+    </section>
+
+    <section class="cat">
+      <div class="cat-head">
+        <h2>Training</h2>
+        <span class="cat-total">${trSummary(trItems, deptTrItems)} <span class="dot">&middot;</span> ${fmtNum(inhouseHours)} in-house hrs</span>
+      </div>
+      <div class="cat-body">${trTree}</div>
+    </section>
+  </div>
+  <p class="meta">Quarters are calendar quarters; incident times shown in ${esc(process.env.REPORT_TIMEZONE || 'UTC')} &mdash; generated ${new Date().toLocaleString()}</p>`
+  }
+
+  <script>
+    (function () {
+      var all = function () { return document.querySelectorAll('details.pd'); };
+      var setAll = function (open) { all().forEach(function (d) { d.open = open; }); };
+      var ex = document.getElementById('expand-all');
+      var co = document.getElementById('collapse-all');
+      if (ex) ex.addEventListener('click', function () { setAll(true); });
+      if (co) co.addEventListener('click', function () { setAll(false); });
+
+      // Print collapsed to the year level, then restore what the user had open.
+      var saved = [];
+      window.addEventListener('beforeprint', function () {
+        saved = Array.prototype.map.call(all(), function (d) { return d.open; });
+        setAll(false);
+      });
+      window.addEventListener('afterprint', function () {
+        all().forEach(function (d, i) { d.open = saved[i]; });
+      });
+    })();
+  </script>
+</body>
+</html>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -997,7 +1392,7 @@ function buildHomeHtml(token) {
   }).join('');
 
   // Main content sections
-  const typeLabel = { heatmap: 'Heatmap', 'filtered-table': 'Filtered Table', matrix: 'Matrix', table: 'Table' };
+  const typeLabel = { heatmap: 'Heatmap', 'filtered-table': 'Filtered Table', matrix: 'Matrix', 'member-activity': 'Drill-down', table: 'Table' };
   const sections = nav.map(cat => {
     const catReports = grouped[cat.id] || [];
     if (!catReports.length) return '';

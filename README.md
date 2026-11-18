@@ -8,6 +8,7 @@ A lightweight Node.js + Express web app that serves protected, embeddable Postgr
 fire_reports/
 ├── server.js      - Express server: routing, middleware, HTML builders
 ├── reports.js     - Report registry: add new reports here
+├── nav.js         - Home page navigation categories
 ├── .env           - Your secrets (gitignored)
 ├── .env.example   - Config template
 └── package.json
@@ -37,6 +38,8 @@ npm run dev        # development (auto-restarts)
 |---|---|
 | `PORT` | Port to listen on (default: 3000) |
 | `REPORT_TOKEN` | Secret token required in every report URL |
+| `REPORT_TIMEZONE` | Timezone for report display, e.g. `America/Detroit` (default: UTC) |
+| `DEPT_NAME` | Department name shown on the home page and report headers |
 | `ALLOWED_DOMAINS` | Comma-separated domains allowed to embed reports (blank = allow all) |
 | `DB_HOST` | PostgreSQL host |
 | `DB_PORT` | PostgreSQL port (default: 5432) |
@@ -55,15 +58,27 @@ https://your-server.com/report/<name>?token=<REPORT_TOKEN>
 |---|---|---|
 | Probationary Metrics | `probationary_metrics` | Plain table |
 | Response by Day & Hour | `response_by_day_hour` | Heatmap |
+| Training Matrix | `training_matrix` | Attendance matrix |
 | Response by Personnel | `response_by_personnel` | Filtered table |
+| Member Activity | `member_activity` | Drill-down |
 
 ### Available Filters
 
 | Parameter | Description |
 |---|---|
-| `start` | Start date `YYYY-MM-DD` (default: Jan 1 of current year) |
+| `start` | Start date `YYYY-MM-DD` (default: Jan 1 of current year; Member Activity defaults to Jan 1 two years ago) |
 | `end` | End date `YYYY-MM-DD` (default: today) |
-| `personnel_id` | Heatmap only — filter to one person; blank = department total |
+| `personnel_id` | Heatmap: filter to one person, blank = department total. Member Activity: the member to report on (required) |
+
+### Member Activity
+
+Shows one member's incidents and training for a date range. Each category is totaled by year, then by calendar quarter, and each quarter expands to list the individual calls or classes.
+
+- Every figure reads `member/department` with the member's percentage share. Incidents compare against all department incidents; training percentage is hours attended ÷ department class hours.
+- Percentages are tenure-adjusted: department totals count only from the member's start date (or the report start date, whichever is later).
+- Quarters and incident times use `REPORT_TIMEZONE`.
+- Printing or saving to PDF collapses the report to the year level.
+- Both active and inactive members appear in the dropdown.
 
 ## Adding a New Report
 

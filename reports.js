@@ -94,6 +94,82 @@ module.exports = {
     `,
   },
 
+  member_activity: {
+    title: 'Member Activity',
+    category: 'personnel',
+    description: 'One member\'s incidents and training over a date range, totaled by year and quarter with every call and class expandable.',
+    type: 'member-activity',
+
+    // Populates the member dropdown. Active members first.
+    personnelQuery: `
+      SELECT personnel_id, personnel_full_name, personnel_is_active,
+             to_char(personnel_start_date, 'YYYY-MM-DD') AS personnel_start
+      FROM {{DB_NAME}}.app.v_personnel
+      ORDER BY personnel_is_active DESC, personnel_full_name
+    `,
+
+    // Department denominators for the percentages. $1 = the member's effective
+    // start (later of their department start date and the report start),
+    // $2 = end date — so new members are compared only against activity that
+    // happened after they joined, matching Response by Personnel.
+    deptIncidentQuery: `
+      SELECT ir.id,
+             to_char((ir.alarm_at AT TIME ZONE 'UTC') AT TIME ZONE '{{TIMEZONE}}', 'YYYY-MM-DD HH24:MI') AS alarm_local
+      FROM {{DB_NAME}}.app.f_incident_report ir
+      WHERE ir.alarm_at >= $1::date
+        AND ir.alarm_at <  ($2::date + interval '1 day')
+    `,
+
+    deptTrainingQuery: `
+      SELECT tc.id,
+             to_char(tc.start_date, 'YYYY-MM-DD') AS class_date,
+             COALESCE(tc.duration_hours, 0)       AS duration_hours
+      FROM {{DB_NAME}}.app.v_training_class tc
+      WHERE tc.start_date >= $1::date
+        AND tc.start_date <= $2::date
+    `,
+
+    // $1 = start date (inclusive)  $2 = end date (inclusive)  $3 = personnel_id
+    // alarm_local is the alarm time converted to REPORT_TIMEZONE, as text, so
+    // the server can group by local year/quarter without Date conversions.
+    incidentQuery: `
+      SELECT DISTINCT
+        ir.id,
+        to_char((ir.alarm_at AT TIME ZONE 'UTC') AT TIME ZONE '{{TIMEZONE}}', 'YYYY-MM-DD HH24:MI') AS alarm_local,
+        ir.incident_number,
+        COALESCE(ir.neris_primary_incident_type_name, ir.actual_incident_type_description) AS incident_type,
+        ir.address
+      FROM {{DB_NAME}}.app.f_incident_report ir
+      INNER JOIN {{DB_NAME}}.app.v_incident_report_personnel irp
+          ON irp.incident_report_id = ir.id
+      WHERE irp.personnel_id = $3::integer
+        AND ir.alarm_at >= $1::date
+        AND ir.alarm_at <  ($2::date + interval '1 day')
+      ORDER BY alarm_local, ir.id
+    `,
+
+    // $1 = start date (inclusive)  $2 = end date (inclusive)  $3 = personnel_id
+    // Attendees are keyed on v_personnel.id (user_id), not personnel_id.
+    trainingQuery: `
+      SELECT DISTINCT
+        tc.id,
+        to_char(tc.start_date, 'YYYY-MM-DD')                AS class_date,
+        tc.name,
+        tc.category_name,
+        COALESCE(tc.duration_hours, 0)                      AS duration_hours,
+        (47174 = ANY(tc.training_type_ids))                 AS is_inhouse
+      FROM {{DB_NAME}}.app.v_personnel p
+      INNER JOIN {{DB_NAME}}.app.v_training_class_attendee tca
+          ON tca.user_id = p.id
+      INNER JOIN {{DB_NAME}}.app.v_training_class tc
+          ON tc.id = tca.training_class_id
+      WHERE p.personnel_id = $3::integer
+        AND tc.start_date >= $1::date
+        AND tc.start_date <= $2::date
+      ORDER BY class_date, tc.name, tc.id
+    `,
+  },
+
   response_by_personnel: {
     title: 'Response by Personnel',
     category: 'personnel',
