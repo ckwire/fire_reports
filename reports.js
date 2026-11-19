@@ -378,7 +378,7 @@ module.exports = {
   },
 
   training_matrix: {
-    title: 'Training Matrix',
+    title: 'Training Matrix (v1)',
     category: 'personnel',
     description: 'Yes/no attendance matrix for in-house training classes — spot who is engaging with the new training format.',
     type: 'matrix',
@@ -404,6 +404,62 @@ module.exports = {
 
     // $1 = integer[] of class IDs returned by classQuery.
     // Matches on user_id (integer) so name-format differences don't break lookups.
+    attendanceQuery: `
+      SELECT DISTINCT user_id, training_class_id
+      FROM {{DB_NAME}}.app.v_training_class_attendee
+      WHERE training_class_id = ANY($1::integer[])
+    `,
+  },
+
+  training_matrix_v2: {
+    title: 'Training Matrix (v2)',
+    category: 'personnel',
+    description: 'In-house training attendance by training night: who was expected, who came, make-ups, attendance rate and trend per member, and who needs a follow-up.',
+    type: 'view', view: 'training_matrix_v2', badge: 'Matrix',
+    minDate: '2025-01-01',
+    minDateNote: 'The in-house training program (training type 47174) began in January 2025.',
+
+    // How attendance is judged. Patterns are case-insensitive regexes matched
+    // against the class name.
+    rules: {
+      // Classes meant for only some ranks. Members outside those ranks are
+      // not expected to attend (their cell shows n/a), but get credit if they do.
+      audiences: [
+        { match: '^Officer Dev', ranks: RANKS.officer, label: 'Officers only' },
+      ],
+      // A make-up class credits the member's most recent missed training
+      // night within `withinDays` before it.
+      makeUp: { match: 'make[\\s-]?up', withinDays: 30 },
+      // Weekend classes (EMS Blitz, live burns, certifications) are extras:
+      // credit and hours when attended, not counted as missed otherwise.
+      weekendIsExtra: true,
+      extras: [],                 // name patterns that are always extras
+      followUpMisses: 3,          // flag N+ missed nights in a row
+      bands: { engaged: 75, regular: 50, low: 25 },   // attendance % cut-offs
+    },
+
+    // $1 = start  $2 = end
+    classQuery: `
+      SELECT tc.id, tc.name, to_char(tc.start_date, 'YYYY-MM-DD') AS class_date,
+             COALESCE(tc.duration_hours, 0)::float8 AS hours,
+             COALESCE(tc.category_name, '')         AS category_name
+      FROM {{DB_NAME}}.app.v_training_class tc
+      WHERE tc.start_date >= $1::date
+        AND tc.start_date <  ($2::date + interval '1 day')
+        AND 47174 = ANY(tc.training_type_ids)
+      ORDER BY tc.start_date, tc.name
+    `,
+
+    // Everyone; the view picks active members (and former members on request).
+    rosterQuery: `
+      SELECT id AS user_id, personnel_full_name AS name, personnel_is_active AS active,
+             COALESCE(personnel_rank, '') AS rank,
+             to_char(personnel_start_date, 'YYYY-MM-DD')          AS start_date,
+             to_char(personnel_end_of_service_date, 'YYYY-MM-DD') AS end_date
+      FROM {{DB_NAME}}.app.v_personnel
+      ORDER BY personnel_full_name
+    `,
+
     attendanceQuery: `
       SELECT DISTINCT user_id, training_class_id
       FROM {{DB_NAME}}.app.v_training_class_attendee

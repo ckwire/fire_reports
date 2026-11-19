@@ -67,7 +67,7 @@ https://your-server.com/report/<name>?token=<REPORT_TOKEN>
 | Incident Mix Trends | `incident_mix` | Trends | 2019 |
 | Weather & Calls | `weather_calls` | Analysis | 2024 |
 | **Incidents** | | | |
-| Response by Day & Hour | `response_by_day_hour` | Heatmap | 2019 |
+| Response by Day & Hour | `response_by_day_hour` | Heatmap | 2019 (member filter 2024) |
 | Response Time Map | `response_time_map` | Map | 2024 |
 | Response Time Performance | `response_time` | Performance | 2024 |
 | Responders per Call | `responders_per_call` | Staffing | 2024 |
@@ -82,10 +82,11 @@ https://your-server.com/report/<name>?token=<REPORT_TOKEN>
 | Member Hours Contributed | `member_hours` | Payroll | 2024 |
 | Recognition & Milestones | `recognition` | People | 2024 |
 | Training vs Call Mix | `training_vs_mix` | Alignment | 2024 |
-| Training Matrix | `training_matrix` | Attendance matrix | 2018 |
+| Training Matrix (v1) | `training_matrix` | Attendance matrix | 2025 |
+| Training Matrix (v2) | `training_matrix_v2` | Matrix | 2025 |
 | Training Coverage by Topic | `training_coverage` | Compliance | 2024 |
 | Probationary Progress | `probationary_metrics` | Progress | 2024 |
-| Response by Personnel | `response_by_personnel` | Filtered table | 2019 |
+| Response by Personnel | `response_by_personnel` | Filtered table | 2024 |
 | Member Activity | `member_activity` | Drill-down | 2024 |
 | Member Scorecard | `member_scorecard` | Scorecard | 2024 |
 
@@ -97,7 +98,7 @@ Incidents imported from the previous system (2019–2023) lack data that newer r
 
 | Parameter | Description |
 |---|---|
-| `start` | Start date `YYYY-MM-DD` (default: Jan 1 of current year; Member Activity defaults to Jan 1 two years ago) |
+| `start` | Start date `YYYY-MM-DD`. Defaults vary by report: usually Jan 1 of the current year or a few years back. Spike Trends defaults to the last 90 days and Training Matrix (v2) to the last 12 months. Reports with a data floor never go earlier than it. |
 | `end` | End date `YYYY-MM-DD` (default: today) |
 | `personnel_id` | Heatmap: filter to one person, blank = department total. Member Activity / Member Scorecard: the member to report on (required) |
 
@@ -134,6 +135,10 @@ One square per day for each year in range (all years available), with holidays o
 ### Weather & Calls
 
 Call mix by temperature and wind band, the specific calls that are over-represented in each band, surge days (`surge` calls or more) with their weather, and calls by weather condition code. Weather is recorded per incident (2024+), so this shows conditions *when calls happened*; it can't measure extra calls per cold day. Wind is stored in m/s and shown in mph. Condition codes have no names in the database: add them to `weatherCodeLabels` in `reports.js`.
+
+### Response by Day & Hour
+
+A day-of-week × hour-of-day heatmap of incident counts for a date range, by local time (`REPORT_TIMEZONE`), with row and column totals. Choose a member (`personnel_id`) to see only the calls they responded to; each cell then shows their count against the department total for that slot. The department view works for all years. The member filter needs personnel records, which begin in 2024.
 
 ### Response Time Map
 
@@ -191,6 +196,28 @@ Call types by year or quarter (`by=quarter`): a stacked chart, share over time, 
 
 Aid given vs received, by neighbouring department, over time, with the net balance. Direction comes from the incident fields: a department named on the call (`aid_department_name`) is aid **given**; departments in `aid_received_names` are aid **received**. A few calls have both and count both ways. Mutual vs automatic aid is only recorded through 2025.
 
+### Training Matrix (v1)
+
+The original yes/no grid: active members down the side and every in-house class (type 47174) in the date range across the top (default: Jan 1 to today). An **X** marks attendance, with totals per member and per class. It's simple and prints landscape. In-house classes begin in 2025, so earlier ranges are empty. See v2 for rates, make-ups and status.
+
+### Training Matrix (v2)
+
+In-house training attendance (type 47174, which began January 2025), one column per **training night**: every in-house class held on the same date is grouped, so two classes in one night count once and attending either counts. Defaults to the last 12 months, with quick links for this year, last year and all.
+
+- **Expected, not just present:** a member is expected only at nights after their start date (and before they left), and only at classes meant for their rank. Officer Development is officers-only, so others show *n/a* there and earn extra credit if they attend. Rates are attended / expected.
+- **Make-ups:** a class whose name matches "make up" credits the member's most recent missed night within 30 days (both cells show **M**).
+- **Extras:** weekend classes (EMS Blitz, live burns, certifications) add credit and hours but are never counted as a miss.
+- **Per member:** came / expected, rate, last 6 nights with a ▲/▼ when it differs from earlier by 15+ points, extras, hours, last attended, and a status band (Engaged 75%+, Regular, Occasional, Rare).
+- **Department:** attendance per night with a 4-night average trend, members by band, and a follow-up list of active members who missed 3+ nights in a row.
+- **Grid layout:**
+  - Rows are grouped by status by default (`group=none` gives one list), each with a group average.
+  - A coloured stripe on each name shows that member's status, and lines separate the months.
+  - Each rate has a small bar.
+  - Hovering a square highlights its member and night.
+- Sort by name, rate, last 6 or hours (within each group), and optionally include former members (shown in their own group).
+
+All of these rules (`audiences`, `makeUp`, `weekendIsExtra`, `extras`, `followUpMisses`, `bands`) live in `rules` under `training_matrix_v2` in `reports.js`. Hours are each class's scheduled length because the per-member hours field is often blank or 0. It prints landscape on 2 pages (matrix on page 1). Training Matrix (v1) is unchanged.
+
 ### Training Coverage by Topic
 
 Hours by category and topic, who has been reached, gaps by focus area, a member × focus-area matrix, and a record-completeness check (classes missing a duration, category, topic or attendees). **Focus areas and any ISO / policy hour targets are configured in `reports.js` (`focusAreas`)**: each has a label, match patterns (regex against the class category and topic names) and `annualHours`. Targets ship blank, so the report shows coverage only until you set them; targets are prorated to the date range and to a new member's start date. Edit that list as your training records and audit requirements evolve.
@@ -198,6 +225,14 @@ Hours by category and topic, who has been reached, gaps by focus area, a member 
 ### Probationary Progress
 
 How new members ramp up. "Probationary" is defined as the first N months after the start date (`months`, default 12) because the personnel rank field is not used consistently. For each member who started in 2024 or later (including those who have left): response % and in-house training % over their window, compared with established active members over the **same calendar dates**, plus month-by-month ramp charts. Members who left are shown for comparison.
+
+### Response by Personnel
+
+One row per active member for a date range:
+- **Incidents:** calls responded to, and their share of the department calls since the member started (tenure-adjusted).
+- **Training:** total hours and in-house hours, with in-house hours as a share of all in-house class hours offered since the member started.
+
+Personnel are recorded on incidents only from 2024, so earlier ranges show no responses.
 
 ### Member Activity
 
