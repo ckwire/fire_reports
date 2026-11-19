@@ -81,6 +81,18 @@ function quartersBetween(start, end) {
   return out;
 }
 
+// Date-string arithmetic (YYYY-MM-DD, calendar days, no time zones involved)
+const toUTC = s => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10));
+const addDays = (s, n) => new Date(toUTC(s) + n * 86400000).toISOString().slice(0, 10);
+const daysBetween = (a, b) => Math.round((toUTC(b) - toUTC(a)) / 86400000) + 1;   // inclusive
+const addMonths = (s, k) => new Date(Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1 + k, +s.slice(8, 10))).toISOString().slice(0, 10);
+
+// "Clark, Joshua Daniel" -> "Clark, J."
+const shortName = full => {
+  const [last, first] = String(full || '').split(',').map(s => s.trim());
+  return first ? `${last}, ${first[0]}.` : (last || '');
+};
+
 const fmtInt = n => n === null || n === undefined ? '—' : Math.round(n).toLocaleString('en-US');
 const fmtNum = (n, d = 1) => n === null || n === undefined ? '—' : (Math.abs(n % 1) < 1e-9 ? String(Math.round(n)) : n.toFixed(d));
 const fmtPct = (n, d = 1) => n === null || n === undefined ? '—' : `${n.toFixed(d)}%`;
@@ -162,8 +174,8 @@ module.exports = function createKit(ctx) {
 
   // series: [{ name, values (null = gap), color, dashed, width, dots }]
   // refLines: [{ value, label, color }]
-  function lineChart({ labels, sublabels = [], series, yFmt = v => String(Math.round(v)), yMax = null, refLines = [], height = 230, aria = 'Chart' }) {
-    const W = 560, H = height, L = 46, R = 16, T = 12, B = sublabels.length ? 46 : 32;
+  function lineChart({ labels, sublabels = [], series, yFmt = v => String(Math.round(v)), yMax = null, refLines = [], height = 230, aria = 'Chart', width = 560, every: everyOpt = null }) {
+    const W = width, H = height, L = 46, R = 16, T = 12, B = sublabels.length ? 46 : 32;
     const vals = series.flatMap(s => s.values).concat(refLines.map(r => r.value)).filter(v => v !== null && v !== undefined);
     const top = yMax || niceTop(Math.max(...vals, 0) * 1.05);
     const x = i => labels.length === 1 ? (L + W - R) / 2 : L + i * (W - L - R) / (labels.length - 1);
@@ -175,7 +187,7 @@ module.exports = function createKit(ctx) {
              `<text x="${L - 6}" y="${y(v) + 3.5}" class="tick" text-anchor="end">${esc(yFmt(v))}</text>`;
     }).join('');
 
-    const every = labels.length > 14 ? Math.ceil(labels.length / 14) : 1;
+    const every = everyOpt || (labels.length > 14 ? Math.ceil(labels.length / 14) : 1);
     const xl = labels.map((l, i) => {
       if (i % every !== 0) return '';
       const sub = sublabels[i] ? `<tspan x="${x(i)}" dy="12" class="xsub">${esc(sublabels[i])}</tspan>` : '';
@@ -205,10 +217,10 @@ module.exports = function createKit(ctx) {
   }
 
   // Vertical stacked bars. series: [{ name, color, values }]; partial[i] fades a bar.
-  function stackedBars({ labels, sublabels = [], series, partial = [], yFmt = v => String(Math.round(v)), height = 250, aria = 'Chart', totals = true }) {
-    const W = 560, H = height, L = 46, R = 12, T = 16, B = sublabels.length ? 46 : 32;
+  function stackedBars({ labels, sublabels = [], series, partial = [], yFmt = v => String(Math.round(v)), height = 250, aria = 'Chart', totals = true, width = 560, every: everyOpt = null, yMax = null }) {
+    const W = width, H = height, L = 46, R = 12, T = 16, B = sublabels.length ? 46 : 32;
     const sums = labels.map((_, i) => series.reduce((a, s) => a + (s.values[i] || 0), 0));
-    const top = niceTop(Math.max(...sums, 0) * 1.08);
+    const top = yMax || niceTop(Math.max(...sums, 0) * 1.08);
     const slot = (W - L - R) / labels.length;
     const bw = Math.min(46, slot * 0.7);
     const y = v => T + (1 - v / top) * (H - T - B);
@@ -219,7 +231,7 @@ module.exports = function createKit(ctx) {
              `<text x="${L - 6}" y="${y(v) + 3.5}" class="tick" text-anchor="end">${esc(yFmt(v))}</text>`;
     }).join('');
 
-    const every = labels.length > 14 ? Math.ceil(labels.length / 14) : 1;
+    const every = everyOpt || (labels.length > 14 ? Math.ceil(labels.length / 14) : 1);
     const bars = labels.map((lab, i) => {
       const cx = L + slot * i + slot / 2;
       let acc = 0;
@@ -247,6 +259,35 @@ module.exports = function createKit(ctx) {
       <span class="hb-t"><span class="hb-b" style="width:${Math.max(0, r.value / top * 100).toFixed(1)}%;background:${r.color || '#1e3a5f'}"></span></span>
       <span class="hb-v">${r.display ?? fmtInt(r.value)}</span>
     </div>`).join('')}</div>`;
+  }
+
+  // Tiny inline trend line; null values break the line.
+  function sparkline(values, { width = 110, height = 24, color = '#1e3a5f', max = null } = {}) {
+    const v = values.filter(x => x !== null && x !== undefined);
+    if (v.length === 0) return '';
+    const top = max || Math.max(...v, 1);
+    const x = i => values.length === 1 ? width / 2 : 2 + i * (width - 4) / (values.length - 1);
+    const y = val => height - 2 - (val / top) * (height - 4);
+    let d = '', pen = false;
+    values.forEach((val, i) => {
+      if (val === null || val === undefined) { pen = false; return; }
+      d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(val).toFixed(1)} `; pen = true;
+    });
+    const lastI = values.map((val, i) => val === null || val === undefined ? -1 : i).filter(i => i >= 0).pop();
+    return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="vertical-align:middle"><path d="${d.trim()}" fill="none" stroke="${color}" stroke-width="1.6"/>` +
+      `<circle cx="${x(lastI).toFixed(1)}" cy="${y(values[lastI]).toFixed(1)}" r="2.2" fill="${color}"/></svg>`;
+  }
+
+  // Incidents + who responded, joined: [{...incident, members: Set(personnel_id)}]
+  async function incidentsWithResponders(report, start, end) {
+    const [incs, resp] = await Promise.all([
+      query(report, 'incidentQuery', [start, end]),
+      query(report, 'responseQuery', [start, end]),
+    ]);
+    const byInc = new Map();
+    resp.forEach(r => { if (!byInc.has(r.incident_id)) byInc.set(r.incident_id, new Set()); byInc.get(r.incident_id).add(r.personnel_id); });
+    return incs.map(i => ({ ...i, date: i.alarm_local.slice(0, 10), category: categoryOf(i), members: byInc.get(i.id) || new Set() }))
+      .sort((a, b) => a.alarm_local.localeCompare(b.alarm_local));
   }
 
   // Heat colour: near-white -> navy. t in 0..1
@@ -406,7 +447,9 @@ module.exports = function createKit(ctx) {
     fmtInt, fmtNum, fmtPct, fmtMin, fmtDate, fmtDateTime,
     localToday, resolveRange, query,
     tile, card, table, rangeFilters, select, numberInput, categorySelect, legend,
-    lineChart, stackedBars, hBars, heat, niceTop,
+    lineChart, stackedBars, hBars, heat, niceTop, sparkline,
+    incidentsWithResponders,
+    addDays, daysBetween, addMonths, shortName,
     page, fail,
   };
 };
@@ -414,4 +457,5 @@ module.exports = function createKit(ctx) {
 Object.assign(module.exports, {
   CATEGORIES, CATEGORY_BY_KEY, categoryOf, mean, percentile, median,
   hourOf, dayNumOf, quarterOf, quarterKey, quartersBetween,
+  addDays, daysBetween, addMonths, shortName,
 });

@@ -6,6 +6,12 @@
 module.exports = [
 
   {
+    id: 'trends',
+    label: 'Trends & Summaries',
+    description: 'Year-end summaries, projections, unusual spikes and long-term patterns.',
+  },
+
+  {
     id: 'incidents',
     label: 'Incidents',
     description: 'Incident response patterns and call volume trends.',

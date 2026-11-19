@@ -38,6 +38,54 @@ const CAT_FIELDS = `
 const RELIABLE_FROM = '2024-01-01';
 const RELIABLE_NOTE = 'Incidents before 2024 were imported without personnel, location, unit and aid details, and their arrival times are measured differently, so this report starts in 2024.';
 
+// Reusable queries for the views/ reports. $1 = start, $2 = end (local dates).
+const Q_INCIDENTS = `
+      SELECT ir.id, ${LOCAL_TS} AS alarm_local, ir.address,
+             ir.latitude::float8 AS lat, ir.longitude::float8 AS lon,
+             ir.time_to_first_arrival_in_seconds::int AS tfa,
+             ir.first_arriving_unit_name AS unit,
+             ${CAT_FIELDS}
+      FROM {{DB_NAME}}.app.f_incident_report ir
+      WHERE ${LOCAL_DATE} BETWEEN $1::date AND $2::date`;
+
+// Who was on each incident (one row per incident + member)
+const Q_RESPONSES = `
+      SELECT DISTINCT irp.incident_report_id AS incident_id, irp.personnel_id
+      FROM {{DB_NAME}}.app.v_incident_report_personnel irp
+      INNER JOIN {{DB_NAME}}.app.f_incident_report ir ON ir.id = irp.incident_report_id
+      WHERE ${LOCAL_DATE} BETWEEN $1::date AND $2::date`;
+
+// Everyone, active or not. user_id keys training/payroll; personnel_id keys incidents.
+const Q_ROSTER = `
+      SELECT id AS user_id, personnel_id, personnel_full_name AS name,
+             personnel_is_active AS active, personnel_rank AS rank,
+             to_char(personnel_start_date, 'YYYY-MM-DD')          AS start_date,
+             to_char(personnel_end_of_service_date, 'YYYY-MM-DD') AS end_date
+      FROM {{DB_NAME}}.app.v_personnel
+      ORDER BY personnel_full_name`;
+
+const Q_CLASSES = `
+      SELECT tc.id, tc.name, to_char(tc.start_date, 'YYYY-MM-DD') AS class_date,
+             COALESCE(tc.category_name, '') AS category_name,
+             COALESCE(tc.topic_names, '')   AS topic_names,
+             COALESCE(tc.duration_hours, 0)::float8 AS duration_hours,
+             (47174 = ANY(tc.training_type_ids)) AS is_inhouse
+      FROM {{DB_NAME}}.app.v_training_class tc
+      WHERE tc.start_date BETWEEN $1::date AND $2::date`;
+
+const Q_ATTENDANCE = `
+      SELECT DISTINCT user_id, training_class_id
+      FROM {{DB_NAME}}.app.v_training_class_attendee
+      WHERE training_class_id = ANY($1::integer[])`;
+
+// Officer / driver ranks (matched case-insensitively against personnel_rank).
+// Rank is today's rank: rank history in the system only starts in mid-2026.
+const RANKS = {
+  officer: ['Lieutenant', 'Captain', 'Assistant Chief', 'Deputy Chief', 'Battalion Chief', 'Fire Chief'],
+  driver:  ['Driver'],
+  officersCountAsDrivers: false,   // set true if your officers are qualified to drive
+};
+
 module.exports = {
 
   probationary_metrics: {
@@ -178,7 +226,7 @@ module.exports = {
 
   incident_mix: {
     title: 'Incident Mix Trends',
-    category: 'incidents',
+    category: 'trends',
     description: 'EMS, fire, service, false alarms and other call types by year or quarter — which kinds of calls are driving the growth in volume.',
     type: 'view', view: 'mix', badge: 'Trends',
     // No floor: NFIRS incident types are consistent back to 2019.
@@ -312,7 +360,7 @@ module.exports = {
 
   incident_projection: {
     title: 'Incident Projection',
-    category: 'incidents',
+    category: 'trends',
     description: 'Projects this year\'s total incident volume from where we are now and how past years finished, with a range, cross-check methods, and a cumulative chart.',
     type: 'projection',
 
@@ -497,6 +545,179 @@ module.exports = {
       FROM {{DB_NAME}}.app.v_training_class_attendee
       WHERE training_class_id = ANY($1::integer[])
     `,
+  },
+
+  spike_trends: {
+    title: 'Spike Trends',
+    category: 'trends',
+    description: 'Is a recent stretch unusual? Compares a date range with the months before it and flags call types, roads, addresses, times and members that spiked or dropped.',
+    type: 'view', view: 'spikes', badge: 'Alerts',
+    minDate: RELIABLE_FROM, minDateNote: RELIABLE_NOTE,
+    incidentQuery: Q_INCIDENTS, responseQuery: Q_RESPONSES, rosterQuery: Q_ROSTER,
+  },
+
+  engagement_watch: {
+    title: 'Engagement Early Warning',
+    category: 'personnel',
+    description: 'Flags members whose recent response or training has dropped well below their own norm — catch drift before someone quietly leaves.',
+    type: 'view', view: 'engagement', badge: 'Alerts',
+    minDate: RELIABLE_FROM,
+    minDateNote: 'Personnel response records begin in 2024.',
+    incidentQuery: Q_INCIDENTS, responseQuery: Q_RESPONSES, rosterQuery: Q_ROSTER,
+    classQuery: Q_CLASSES, attendanceQuery: Q_ATTENDANCE,
+  },
+
+  depth_of_bench: {
+    title: 'Depth of Bench',
+    category: 'personnel',
+    description: 'How many different members cover each day and hour, how much the department leans on its top responders, and what happens to staffing without them.',
+    type: 'view', view: 'bench', badge: 'Staffing',
+    minDate: RELIABLE_FROM, minDateNote: RELIABLE_NOTE,
+    incidentQuery: Q_INCIDENTS, responseQuery: Q_RESPONSES, rosterQuery: Q_ROSTER,
+  },
+
+  officer_driver_coverage: {
+    title: 'Officer & Driver Coverage',
+    category: 'personnel',
+    description: 'Share of calls with an officer and with a qualified driver on them, by day, hour, call type and over time.',
+    type: 'view', view: 'officer_driver', badge: 'Staffing',
+    minDate: RELIABLE_FROM, minDateNote: RELIABLE_NOTE,
+    ranks: RANKS,
+    incidentQuery: Q_INCIDENTS, responseQuery: Q_RESPONSES, rosterQuery: Q_ROSTER,
+    oicQuery: `
+      SELECT ir.id AS incident_id, NULLIF(ir.officer_in_charge_name, '') AS oic
+      FROM {{DB_NAME}}.app.f_incident_report ir
+      WHERE ${LOCAL_DATE} BETWEEN $1::date AND $2::date`,
+  },
+
+  crew_pairs: {
+    title: 'Who Responds Together',
+    category: 'personnel',
+    description: 'Members who most often respond as a pair or crew, who tends to respond with few others, and natural mentors for probationers.',
+    type: 'view', view: 'crews', badge: 'People',
+    minDate: RELIABLE_FROM, minDateNote: RELIABLE_NOTE,
+    incidentQuery: Q_INCIDENTS, responseQuery: Q_RESPONSES, rosterQuery: Q_ROSTER,
+  },
+
+  member_hours: {
+    title: 'Member Hours Contributed',
+    category: 'personnel',
+    description: 'Incident, training and activity hours per member from payroll time records, with estimated pay from each member\'s pay-rate history.',
+    type: 'view', view: 'member_hours', badge: 'Payroll',
+    minDate: RELIABLE_FROM,
+    minDateNote: 'Payroll time records begin in 2024.',
+    rosterQuery: Q_ROSTER,
+    // One row per time entry. kind = incident_reports | training | activities.
+    // time_in is converted to local time the same way as alarm times.
+    payrollQuery: `
+      SELECT p.user_id, p.public_name, p.orig_report_group_code AS kind,
+             to_char((COALESCE(p.time_in, p.record_date) AT TIME ZONE 'UTC') AT TIME ZONE '{{TIMEZONE}}', 'YYYY-MM-DD') AS work_date,
+             COALESCE(p.total_time, 0)::float8 AS hours,
+             p.pay_rate::float8 AS row_rate, COALESCE(p.stipend, 0)::float8 AS stipend
+      FROM {{DB_NAME}}.app.v_payroll_summary p
+      WHERE ((COALESCE(p.time_in, p.record_date) AT TIME ZONE 'UTC') AT TIME ZONE '{{TIMEZONE}}')::date BETWEEN $1::date AND $2::date`,
+    rateQuery: `
+      SELECT user_id, to_char(start_date, 'YYYY-MM-DD') AS start_date,
+             to_char(end_date, 'YYYY-MM-DD') AS end_date, pay_rate::float8 AS pay_rate
+      FROM {{DB_NAME}}.app.v_personnel_pay_rate
+      ORDER BY user_id, start_date`,
+  },
+
+  recognition: {
+    title: 'Recognition & Milestones',
+    category: 'personnel',
+    description: 'Upcoming service anniversaries, call-count milestones, and the top responders and trainers for the month, quarter and year.',
+    type: 'view', view: 'recognition', badge: 'People',
+    minDate: RELIABLE_FROM,
+    minDateNote: 'Call counts are from personnel records, which begin in 2024.',
+    incidentQuery: Q_INCIDENTS, responseQuery: Q_RESPONSES, rosterQuery: Q_ROSTER,
+    classQuery: Q_CLASSES, attendanceQuery: Q_ATTENDANCE,
+  },
+
+  response_time_map: {
+    title: 'Response Time Map',
+    category: 'incidents',
+    description: 'Map of the district shaded by time to first arrival — where coverage is geographically weakest.',
+    type: 'view', view: 'response_map', badge: 'Map',
+    minDate: RELIABLE_FROM, minDateNote: RELIABLE_NOTE,
+    incidentQuery: Q_INCIDENTS,
+  },
+
+  training_vs_mix: {
+    title: 'Training vs Call Mix',
+    category: 'personnel',
+    description: 'What we train on compared with what we actually run — e.g. the share of calls that are medical vs the share of training hours that are EMS.',
+    type: 'view', view: 'training_mix', badge: 'Alignment',
+    minDate: RELIABLE_FROM,
+    minDateNote: 'Training topics were not recorded before 2024.',
+    incidentQuery: Q_INCIDENTS, classQuery: Q_CLASSES, attendanceQuery: Q_ATTENDANCE,
+    // Pairs each call category (views/kit.js) with the training that prepares
+    // for it. Patterns match the class category or topic names (regex, any case).
+    alignment: [
+      { category: 'medical',   label: 'Medical / EMS',        match: ['^EMS', 'OPERATIONS - Medical', 'EMS CME'] },
+      { category: 'fire',      label: 'Fire',                 match: ['OPERATIONS - Firefighting', '^FIRE$', 'Fire Certifications'] },
+      { category: 'rescue',    label: 'Rescue & vehicle crashes', match: ['Vehicle Rescue', 'Extrication', 'Water and Ice Rescue'] },
+      { category: 'hazard',    label: 'Hazardous conditions', match: ['HAZMAT'] },
+    ],
+  },
+
+  call_calendar: {
+    title: 'Call Calendar',
+    category: 'trends',
+    description: 'Year-at-a-glance calendar with one square per day: busiest days, holidays, storm clusters and the seasonal rhythm.',
+    type: 'view', view: 'calendar', badge: 'Calendar',
+    // No floor: daily incident counts are consistent back to 2019.
+    dailyQuery: `
+      SELECT ${LOCAL_DATE}::text AS d, COUNT(*)::int AS n,
+             string_agg(DISTINCT COALESCE(NULLIF(ir.actual_incident_type_description, ''), ir.neris_primary_incident_type_name), '; ') AS types
+      FROM {{DB_NAME}}.app.f_incident_report ir
+      WHERE ${LOCAL_DATE} BETWEEN $1::date AND $2::date
+      GROUP BY 1`,
+  },
+
+  weather_calls: {
+    title: 'Weather & Calls',
+    category: 'trends',
+    description: 'Call volume and call types by temperature, wind and weather condition, and the weather on surge days.',
+    type: 'view', view: 'weather', badge: 'Analysis',
+    minDate: RELIABLE_FROM,
+    minDateNote: 'Weather was not recorded on incidents before 2024.',
+    // Weather condition codes are stored as numbers with no labels in the
+    // database. Fill in names here once you know them, e.g. '17': 'Snow'.
+    weatherCodeLabels: {},
+    // Wind is stored in metres per second (the temperature fields are metric);
+    // the report converts to mph.
+    dataQuery: `
+      SELECT ir.id, ${LOCAL_TS} AS alarm_local,
+             ir.temperature_fahrenheit::float8 AS temp_f,
+             ir.wind_speed::float8 AS wind_ms,
+             ir.humidity::float8 AS humidity,
+             NULLIF(ir.weather_type, '') AS wcode,
+             ${CAT_FIELDS}
+      FROM {{DB_NAME}}.app.f_incident_report ir
+      WHERE ${LOCAL_DATE} BETWEEN $1::date AND $2::date`,
+  },
+
+  annual_report: {
+    title: 'Annual Report',
+    category: 'trends',
+    description: 'One printable page for the township board: calls, mix, response times, staffing, mutual aid, training and member hours for a year.',
+    type: 'view', view: 'annual', badge: 'Summary',
+    // Uses all years; figures that need 2024+ data show "n/a" for earlier years.
+    incidentQuery: Q_INCIDENTS, responseQuery: Q_RESPONSES, rosterQuery: Q_ROSTER,
+    classQuery: Q_CLASSES, attendanceQuery: Q_ATTENDANCE,
+    aidQuery: `
+      SELECT ir.id, NULLIF(ir.aid_department_name, '') AS given, NULLIF(ir.aid_received_names, '') AS received,
+             EXTRACT(EPOCH FROM ir.alarm_at)::float8 AS t0,
+             EXTRACT(EPOCH FROM COALESCE(ir.last_unit_cleared_datetime,
+               ir.alarm_at + (ir.total_call_duration_in_seconds * interval '1 second')))::float8 AS t1
+      FROM {{DB_NAME}}.app.f_incident_report ir
+      WHERE ${LOCAL_DATE} BETWEEN $1::date AND $2::date`,
+    hoursQuery: `
+      SELECT p.orig_report_group_code AS kind, SUM(COALESCE(p.total_time, 0))::float8 AS hours, COUNT(DISTINCT p.user_id)::int AS members
+      FROM {{DB_NAME}}.app.v_payroll_summary p
+      WHERE ((COALESCE(p.time_in, p.record_date) AT TIME ZONE 'UTC') AT TIME ZONE '{{TIMEZONE}}')::date BETWEEN $1::date AND $2::date
+      GROUP BY 1`,
   },
 
   response_by_personnel: {

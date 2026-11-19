@@ -11,8 +11,7 @@ fire_reports/
 ├── nav.js         - Home page navigation categories
 ├── views/         - One module per newer report (see "Adding a View Report")
 │   ├── kit.js     - Shared page shell, styles, charts, stats, incident categories
-│   └── *.js       - response_time, responders, simultaneous, hotspots, mix,
-│                    mutual_aid, training_coverage, probationary
+│   └── *.js       - one file per report (response_time, spikes, annual, …)
 ├── .env           - Your secrets (gitignored)
 ├── .env.example   - Config template
 └── package.json
@@ -60,14 +59,29 @@ https://your-server.com/report/<name>?token=<REPORT_TOKEN>
 
 | Report | Slug | Type | Data from |
 |---|---|---|---|
-| Response by Day & Hour | `response_by_day_hour` | Heatmap | 2019 |
+| **Trends & Summaries** | | | |
+| Annual Report | `annual_report` | Summary | 2019 (some figures 2024) |
+| Spike Trends | `spike_trends` | Alerts | 2024 |
+| Call Calendar | `call_calendar` | Calendar | 2019 |
 | Incident Projection | `incident_projection` | Projection | 2019 |
 | Incident Mix Trends | `incident_mix` | Trends | 2019 |
+| Weather & Calls | `weather_calls` | Analysis | 2024 |
+| **Incidents** | | | |
+| Response by Day & Hour | `response_by_day_hour` | Heatmap | 2019 |
+| Response Time Map | `response_time_map` | Map | 2024 |
 | Response Time Performance | `response_time` | Performance | 2024 |
 | Responders per Call | `responders_per_call` | Staffing | 2024 |
 | Simultaneous Calls | `simultaneous_calls` | Staffing | 2024 |
 | Hot Spots | `hot_spots` | Map | 2024 |
 | Mutual Aid Balance | `mutual_aid` | Balance | 2024 |
+| **Personnel** | | | |
+| Engagement Early Warning | `engagement_watch` | Alerts | 2024 |
+| Depth of Bench | `depth_of_bench` | Staffing | 2024 |
+| Officer & Driver Coverage | `officer_driver_coverage` | Staffing | 2024 |
+| Who Responds Together | `crew_pairs` | People | 2024 |
+| Member Hours Contributed | `member_hours` | Payroll | 2024 |
+| Recognition & Milestones | `recognition` | People | 2024 |
+| Training vs Call Mix | `training_vs_mix` | Alignment | 2024 |
 | Training Matrix | `training_matrix` | Attendance matrix | 2018 |
 | Training Coverage by Topic | `training_coverage` | Compliance | 2024 |
 | Probationary Progress | `probationary_metrics` | Progress | 2024 |
@@ -104,6 +118,54 @@ Estimates the year-end incident total from where the year stands now and how pas
 - **Tables:** past years at the same date (share done, what each implies) and incidents by month.
 - **Back-testing:** choose an as-of date in a finished year to compare each method with the actual result. (As of Nov 16, 2025 the headline projected 628; the actual was 624.)
 - Counts use local dates (`REPORT_TIMEZONE`). Prints on one page.
+
+### Annual Report
+
+One printable page per year (`year`, default the last complete year; the current year shows year-to-date against the same dates last year): calls and change vs the prior year, calls by month and type, response times, members per call, overlapping calls, mutual aid, members joined/left, training and member hours, and top responders. Figures needing 2024+ data show "n/a" for earlier years.
+
+### Spike Trends
+
+Is a recent stretch unusual? The date range is the **focus window** (default: last 90 days); it is compared with the `baseline` months before it (default 12). For every call type, specific call, road, address, time of day, day of week and member, the report computes how many calls the baseline rate predicts for a window that long and scores the difference (variance-stabilised Poisson score: ±2 notable, ±3 strong). Members are compared on their *share* of department calls, so a busy month for everyone isn't a personal spike. Specific call names are compared only within the same coding scheme (NFIRS vs NERIS). Seasonality is not removed.
+
+### Call Calendar
+
+One square per day for each year in range (all years available), with holidays outlined; busiest days with what came in, average calls by weekday, holiday vs normal days, and calls per day by month across years.
+
+### Weather & Calls
+
+Call mix by temperature and wind band, the specific calls that are over-represented in each band, surge days (`surge` calls or more) with their weather, and calls by weather condition code. Weather is recorded per incident (2024+), so this shows conditions *when calls happened*; it can't measure extra calls per cold day. Wind is stored in m/s and shown in mph. Condition codes have no names in the database: add them to `weatherCodeLabels` in `reports.js`.
+
+### Response Time Map
+
+The district divided into squares (`cell` ½, 1 or 2 km) and coloured by 90th-percentile (or median) time to first arrival, relative to the district (green = fastest areas, red = slowest), with the slowest and fastest areas listed by their main roads. `min` sets the fewest timed calls a square needs. Uses Leaflet + OpenStreetMap like Hot Spots.
+
+### Engagement Early Warning
+
+Each active member's share of department calls over the last `days` (30/60/90/180) compared with their own norm over the `baseline` months before. A binomial z-score separates real drops from normal variation. **Alert** = signal −3 or lower, under 40% of their usual rate, or no calls and no training for 60+ days; **Watch** = signal −2 or under 60% of usual. Shows 12-month sparklines, in-house training share, training hours per 30 days, and days since last call / class. Members are compared only with themselves.
+
+### Depth of Bench
+
+How many *different* members responded in each day × 4-hour slot, how concentrated the work is (how many members cover half of all responses; the top `top` active members' share), and what share of calls would still have met `min` responders without those top members — overall and by time of day.
+
+### Officer & Driver Coverage
+
+Share of calls with an officer and with a qualified driver on them, by day × time, quarter and call type; who signs as officer in charge; and calls with neither. Officer and driver ranks are set in `RANKS` in `reports.js` (`officersCountAsDrivers` too). Ranks are **current** ranks — rank history in the system only begins in mid-2026.
+
+### Who Responds Together
+
+Calls-together matrix for the 14 most active members, the most frequent pairs, the strongest partnerships by *lift* (how much more often a pair shares calls than chance predicts; `min` = fewest shared calls), members most often in small crews, and natural mentor matches for members in their first 12 months.
+
+### Member Hours Contributed
+
+Hours from the payroll time records (incidents, training, activities & events) by member and month, with **estimated pay** = hours × the member's pay rate in effect on that date (`v_personnel_pay_rate`, latest rate carried forward past the last period) plus stipends. It does not re-apply payroll rules, so it won't match a payroll run to the dollar.
+
+### Recognition & Milestones
+
+Top responders and trainers this month, quarter and year; service anniversaries in the next `ahead` days (milestone years highlighted); call-count milestones coming up (at each member's recent pace) and recently reached; most improved this quarter; longest serving. Call counts are since 2024.
+
+### Training vs Call Mix
+
+Share of emergency calls by type compared with share of call-specific training (member-hours) for the same type, with the gap, a quarterly trend for each, and the general training not tied to a call type. Call types are paired with training by the `alignment` patterns in `reports.js`.
 
 ### Response Time Performance
 
