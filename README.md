@@ -87,6 +87,7 @@ https://your-server.com/report/<name>?token=<REPORT_TOKEN>
 | Training Coverage by Topic | `training_coverage` | Compliance | 2024 |
 | Probationary Progress | `probationary_metrics` | Progress | 2024 |
 | Response by Personnel | `response_by_personnel` | Filtered table | 2024 |
+| Work Performance Stipend | `stipend_review` | Stipend | 2024 |
 | Member Activity | `member_activity` | Drill-down | 2024 |
 | Member Scorecard | `member_scorecard` | Scorecard | 2024 |
 
@@ -233,6 +234,18 @@ One row per active member for a date range:
 - **Training:** total hours and in-house hours, with in-house hours as a share of all in-house class hours offered since the member started.
 
 Personnel are recorded on incidents only from 2024, so earlier ranges show no responses.
+
+### Work Performance Stipend
+
+The chief's stipend review for one member, laid out like the paper form. Choose a **member** and a date range (quick links: this year, last year, last 12 / 6 months) and optionally type the **total available stipend**. Each of the five categories is worth an equal share (20%); the report suggests Yes / No for each from the data and totals the stipend earned. The Yes / No toggles can be flipped on screen (the stipend recalculates, and a "changed" note shows which differ from the suggestion); the printed page shows the chosen answers with a notes box and signature lines. Toggles are not saved, so they reset on reload.
+
+1. **Call response** (25% requirement): share of department calls since the member started, for the review period, the last 6 months and the last 12 months (ending on the range end), with calls and payroll hours on incident responses. The requirement is judged on the review period by default.
+2. **Training** (30 hours, at least 50% in-house, prorated to the range): total, in-house and outside hours from class length, and the number of classes as lead instructor.
+3. **Special projects, committees or extra duties:** events from the events log the member took part in that aren't meetings.
+4. **Meeting participation:** events sorted into Officers, Association / Business meeting, Fire Board and Committee rows by name, with held / attended / hours. Only business meetings and committee or commission events are recorded in the system today; the others show "none recorded". The Yes / No is judged on the business-meeting attendance (50%).
+5. **Professional development & standards:** officer-training hours, course work or seminar hours (classes outside the department), and a **suggested "Member in good standing"** built from the metrics: active, call response and training requirements met, and a call or class in the last 60 days. "Uphold department values" is left for the chief.
+
+Call and training figures match Response by Personnel. Every threshold, the instructor types, which events count as which meeting, and the default stipend amount are in `rules` under `stipend_review` in `reports.js`. Prints on 2 pages.
 
 ### Member Activity
 

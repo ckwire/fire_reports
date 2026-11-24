@@ -467,6 +467,83 @@ module.exports = {
     `,
   },
 
+  stipend_review: {
+    title: 'Work Performance Stipend',
+    category: 'personnel',
+    description: 'One member\'s stipend review: call response %, training hours and in-house share, extra duties, meetings and professional development, with a suggested Yes/No for each category and the stipend earned.',
+    type: 'view', view: 'stipend', badge: 'Stipend',
+    minDate: RELIABLE_FROM,
+    minDateNote: 'Personnel response and training records begin in 2024.',
+
+    // The review rules. Change these to match the stipend policy; no code change needed.
+    // The report SUGGESTS Yes/No for each category from the data; the chief can flip
+    // any of them on screen and the stipend recalculates.
+    rules: {
+      categories: 5,                       // each category is worth 1/5 (20%) of the stipend
+      available: null,                     // default "total available stipend" ($), or null to type it in
+      callResponse: {
+        minPct: 25,                        // "25% response requirement"
+        basis: 'period',                   // which figure is judged: 'period' (the date range), 'six' or 'twelve' (trailing months)
+      },
+      training: {
+        minHoursPerYear: 30,               // prorated to the date range
+        minInhousePct: 50,                 // at least this share of hours must be in-house
+        leadTypes: ['Lead / Primary'],     // instructor types that count as "lead instructor"
+      },
+      extraDuties: { minItems: 1 },        // events/projects (outside meetings) needed to suggest "Yes"
+      // Events are sorted into these rows by name (case-insensitive regex), first match wins.
+      // Rows with no matching events show "not recorded". `primary` is the row the
+      // Yes/No suggestion is judged on (attended share of meetings held).
+      meetings: {
+        minAttendPct: 50,
+        rows: [
+          { label: 'Officers',                     match: 'Officers?\\b.*Meeting|Officer Meeting' },
+          { label: 'Association / Business meeting', match: 'Business Meeting', primary: true },
+          { label: 'Fire Board',                   match: 'Fire Board|Board Meeting' },
+          { label: 'Committee',                    match: 'Committee|Commission' },
+        ],
+      },
+      professional: {
+        officerTraining: ['^Officer Dev', '^OFFICER'],   // class name / category patterns counted as officer training
+        recentDays: 60,                                  // good standing needs a call or class within this many days
+      },
+    },
+
+    rosterQuery: Q_ROSTER,
+    // $1 = first date  $2 = last date
+    incidentQuery: `
+      SELECT ir.id, ${LOCAL_TS} AS alarm_local
+      FROM {{DB_NAME}}.app.f_incident_report ir
+      WHERE ${LOCAL_DATE} BETWEEN $1::date AND $2::date`,
+    responseQuery: Q_RESPONSES,
+    // Hours on incident calls from payroll time entries. $3 = member user_id
+    hoursQuery: `
+      SELECT to_char((COALESCE(p.time_in, p.record_date) AT TIME ZONE 'UTC') AT TIME ZONE '{{TIMEZONE}}', 'YYYY-MM-DD') AS work_date,
+             COALESCE(p.total_time, 0)::float8 AS hours
+      FROM {{DB_NAME}}.app.v_payroll_summary p
+      WHERE p.user_id = $3::integer
+        AND p.orig_report_group_code = 'incident_reports'
+        AND ((COALESCE(p.time_in, p.record_date) AT TIME ZONE 'UTC') AT TIME ZONE '{{TIMEZONE}}')::date BETWEEN $1::date AND $2::date`,
+    classQuery: Q_CLASSES,
+    attendanceQuery: Q_ATTENDANCE,
+    // Instructors for the classes in range. instructor_id is the member's personnel_id.
+    instructorQuery: `
+      SELECT training_class_id, instructor_id AS personnel_id, instructor_type
+      FROM {{DB_NAME}}.app.v_training_class_instructor
+      WHERE training_class_id = ANY($1::integer[])`,
+    // Every event in range, flagged with whether member $3 took part (and the hours they were paid for).
+    eventQuery: `
+      SELECT e.id, e.event_name AS name, to_char(e.start_date, 'YYYY-MM-DD') AS event_date,
+             COALESCE(e.duration, 0)::float8 AS duration,
+             EXISTS (SELECT 1 FROM {{DB_NAME}}.app.v_event_participant ep
+                     WHERE ep.event_id = e.id AND ep.user_id = $3::integer) AS attended,
+             COALESCE((SELECT SUM(s.total_time) FROM {{DB_NAME}}.app.v_event_payroll_summary s
+                       WHERE s.event_id = e.id AND s.user_id = $3::integer), 0)::float8 AS paid_hours
+      FROM {{DB_NAME}}.app.v_event e
+      WHERE e.start_date >= $1::date AND e.start_date < ($2::date + interval '1 day')
+      ORDER BY e.start_date, e.event_name`,
+  },
+
   member_activity: {
     title: 'Member Activity',
     category: 'personnel',
