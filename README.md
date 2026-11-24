@@ -57,43 +57,43 @@ npm run dev        # development (auto-restarts)
 https://your-server.com/report/<name>?token=<REPORT_TOKEN>
 ```
 
-| Report | Slug | Type | Data from |
-|---|---|---|---|
-| **Trends & Summaries** | | | |
-| Annual Report | `annual_report` | Summary | 2019 (some figures 2024) |
-| Spike Trends | `spike_trends` | Alerts | 2024 |
-| Call Calendar | `call_calendar` | Calendar | 2019 |
-| Incident Projection | `incident_projection` | Projection | 2019 |
-| Incident Mix Trends | `incident_mix` | Trends | 2019 |
-| Weather & Calls | `weather_calls` | Analysis | 2024 |
-| **Incidents** | | | |
-| Response by Day & Hour | `response_by_day_hour` | Heatmap | 2019 (member filter 2024) |
-| Response Time Map | `response_time_map` | Map | 2024 |
-| Response Time Performance | `response_time` | Performance | 2024 |
-| Responders per Call | `responders_per_call` | Staffing | 2024 |
-| Simultaneous Calls | `simultaneous_calls` | Staffing | 2024 |
-| Hot Spots | `hot_spots` | Map | 2024 |
-| Mutual Aid Balance | `mutual_aid` | Balance | 2024 |
-| **Personnel** | | | |
-| Engagement Early Warning | `engagement_watch` | Alerts | 2024 |
-| Depth of Bench | `depth_of_bench` | Staffing | 2024 |
-| Officer & Driver Coverage | `officer_driver_coverage` | Staffing | 2024 |
-| Who Responds Together | `crew_pairs` | People | 2024 |
-| Member Hours Contributed | `member_hours` | Payroll | 2024 |
-| Recognition & Milestones | `recognition` | People | 2024 |
-| Training vs Call Mix | `training_vs_mix` | Alignment | 2024 |
-| Training Matrix (v1) | `training_matrix` | Attendance matrix | 2025 |
-| Training Matrix (v2) | `training_matrix_v2` | Matrix | 2025 |
-| Training Coverage by Topic | `training_coverage` | Compliance | 2024 |
-| Probationary Progress | `probationary_metrics` | Progress | 2024 |
-| Response by Personnel | `response_by_personnel` | Filtered table | 2024 |
-| Work Performance Stipend | `stipend_review` | Stipend | 2024 |
-| Member Activity | `member_activity` | Drill-down | 2024 |
-| Member Scorecard | `member_scorecard` | Scorecard | 2024 |
+| Report | Slug | Type |
+|---|---|---|
+| **Trends & Summaries** | | |
+| Annual Report | `annual_report` | Summary |
+| Spike Trends | `spike_trends` | Alerts |
+| Call Calendar | `call_calendar` | Calendar |
+| Incident Projection | `incident_projection` | Projection |
+| Incident Mix Trends | `incident_mix` | Trends |
+| Weather & Calls | `weather_calls` | Analysis |
+| **Incidents** | | |
+| Response by Day & Hour | `response_by_day_hour` | Heatmap |
+| Response Time Map | `response_time_map` | Map |
+| Response Time Performance | `response_time` | Performance |
+| Responders per Call | `responders_per_call` | Staffing |
+| Simultaneous Calls | `simultaneous_calls` | Staffing |
+| Hot Spots | `hot_spots` | Map |
+| Mutual Aid Balance | `mutual_aid` | Balance |
+| **Personnel** | | |
+| Engagement Early Warning | `engagement_watch` | Alerts |
+| Depth of Bench | `depth_of_bench` | Staffing |
+| Officer & Driver Coverage | `officer_driver_coverage` | Staffing |
+| Who Responds Together | `crew_pairs` | People |
+| Member Hours Contributed | `member_hours` | Payroll |
+| Recognition & Milestones | `recognition` | People |
+| Training vs Call Mix | `training_vs_mix` | Alignment |
+| Training Matrix (v1) | `training_matrix` | Attendance matrix |
+| Training Matrix (v2) | `training_matrix_v2` | Matrix |
+| Training Coverage by Topic | `training_coverage` | Compliance |
+| Probationary Progress | `probationary_metrics` | Progress |
+| Response by Personnel | `response_by_personnel` | Filtered table |
+| Work Performance Stipend | `stipend_review` | Stipend |
+| Member Activity | `member_activity` | Drill-down |
+| Member Scorecard | `member_scorecard` | Scorecard |
 
-### Why some reports start in 2024
+### Data floors (`minDate`)
 
-Incidents imported from the previous system (2019–2023) lack data that newer reports depend on: **personnel on each call, map coordinates, station and unit, neighbouring-department names, and training topics**, and their **arrival times are measured differently** (median about 7 minutes versus about 12 from 2024 on, so the two can't be compared). Reports that need those fields set `minDate` in `reports.js`; the date pickers stop at that date, the server enforces it, and the page says why. Reports that only need the incident count and type (Incident Mix, Projection, Response by Day & Hour) use all years.
+A report can set `minDate` (and a `minDateNote`) in `reports.js` when your older records lack fields it needs, for example personnel on each call, coordinates, or consistently measured arrival times. The date pickers stop at that date, the server enforces it, and the page explains why. Leave it out and the report accepts any date. Set the dates that match your own data.
 
 ### Available Filters
 
@@ -118,12 +118,11 @@ Estimates the year-end incident total from where the year stands now and how pas
 - **Cross-checks:** straight run rate, YTD + average remainder, last year's pace, and a long-term trend line through past totals. When these agree the estimate is solid; when they spread, lean on the range.
 - **Chart:** cumulative incidents by day of year for each year, with the projection cone out to Dec 31.
 - **Tables:** past years at the same date (share done, what each implies) and incidents by month.
-- **Back-testing:** choose an as-of date in a finished year to compare each method with the actual result. (As of Nov 16, 2025 the headline projected 628; the actual was 624.)
-- Counts use local dates (`REPORT_TIMEZONE`). Prints on one page.
+- **Back-testing:** choose an as-of date in a finished year to compare each method with the actual result.- Counts use local dates (`REPORT_TIMEZONE`). Prints on one page.
 
 ### Annual Report
 
-One printable page per year (`year`, default the last complete year; the current year shows year-to-date against the same dates last year): calls and change vs the prior year, calls by month and type, response times, members per call, overlapping calls, mutual aid, members joined/left, training and member hours, and top responders. Figures needing 2024+ data show "n/a" for earlier years.
+One printable page per year (`year`, default the last complete year; the current year shows year-to-date against the same dates last year): calls and change vs the prior year, calls by month and type, response times, members per call, overlapping calls, mutual aid, members joined/left, training and member hours, and top responders. Figures that need data a year doesn't have show "n/a".
 
 ### Spike Trends
 
@@ -135,11 +134,11 @@ One square per day for each year in range (all years available), with holidays o
 
 ### Weather & Calls
 
-Call mix by temperature and wind band, the specific calls that are over-represented in each band, surge days (`surge` calls or more) with their weather, and calls by weather condition code. Weather is recorded per incident (2024+), so this shows conditions *when calls happened*; it can't measure extra calls per cold day. Wind is stored in m/s and shown in mph. Condition codes have no names in the database: add them to `weatherCodeLabels` in `reports.js`.
+Call mix by temperature and wind band, the specific calls that are over-represented in each band, surge days (`surge` calls or more) with their weather, and calls by weather condition code. Weather is recorded per incident, so this shows conditions *when calls happened*; it can't measure extra calls per cold day. Wind is stored in m/s and shown in mph. Condition codes have no names in the database: add them to `weatherCodeLabels` in `reports.js`.
 
 ### Response by Day & Hour
 
-A day-of-week × hour-of-day heatmap of incident counts for a date range, by local time (`REPORT_TIMEZONE`), with row and column totals. Choose a member (`personnel_id`) to see only the calls they responded to; each cell then shows their count against the department total for that slot. The department view works for all years. The member filter needs personnel records, which begin in 2024.
+A day-of-week × hour-of-day heatmap of incident counts for a date range, by local time (`REPORT_TIMEZONE`), with row and column totals. Choose a member (`personnel_id`) to see only the calls they responded to; each cell then shows their count against the department total for that slot. The member filter needs personnel recorded on incidents.
 
 ### Response Time Map
 
@@ -155,7 +154,7 @@ How many *different* members responded in each day × 4-hour slot, how concentra
 
 ### Officer & Driver Coverage
 
-Share of calls with an officer and with a qualified driver on them, by day × time, quarter and call type; who signs as officer in charge; and calls with neither. Officer and driver ranks are set in `RANKS` in `reports.js` (`officersCountAsDrivers` too). Ranks are **current** ranks — rank history in the system only begins in mid-2026.
+Share of calls with an officer and with a qualified driver on them, by day × time, quarter and call type; who signs as officer in charge; and calls with neither. Officer and driver ranks are set in `RANKS` in `reports.js` (`officersCountAsDrivers` too). Ranks are **current** ranks, so past calls are judged by today's rank.
 
 ### Who Responds Together
 
@@ -167,7 +166,7 @@ Hours from the payroll time records (incidents, training, activities & events) b
 
 ### Recognition & Milestones
 
-Top responders and trainers this month, quarter and year; service anniversaries in the next `ahead` days (milestone years highlighted); call-count milestones coming up (at each member's recent pace) and recently reached; most improved this quarter; longest serving. Call counts are since 2024.
+Top responders and trainers this month, quarter and year; service anniversaries in the next `ahead` days (milestone years highlighted); call-count milestones coming up (at each member's recent pace) and recently reached; most improved this quarter; longest serving.
 
 ### Training vs Call Mix
 
@@ -191,19 +190,18 @@ Where calls repeat. A map (Leaflet + OpenStreetMap, loaded from public CDNs in t
 
 ### Incident Mix Trends
 
-Call types by year or quarter (`by=quarter`): a stacked chart, share over time, counts by category, a "what changed" table that attributes growth to categories, and the most common specific call types. Incidents are bucketed into common categories (Medical, Rescue & crashes, Fire, Hazardous, Service & weather, Cancelled / good intent, False alarms, Other) from NFIRS codes (through 2025) and NERIS groups (2025 on); see `categoryOf` in `views/kit.js`. Crashes are matched by name because NERIS files them under Medical or Hazardous. Watch for a step change at the 2025–2026 switch.
+Call types by year or quarter (`by=quarter`): a stacked chart, share over time, counts by category, a "what changed" table that attributes growth to categories, and the most common specific call types. Incidents are bucketed into common categories (Medical, Rescue & crashes, Fire, Hazardous, Service & weather, Cancelled / good intent, False alarms, Other) from NFIRS codes and NERIS groups (whichever each incident carries); see `categoryOf` in `views/kit.js`. Crashes are matched by name because NERIS files them under Medical or Hazardous. Watch for a step change if your department moved from one coding scheme to the other.
 
 ### Mutual Aid Balance
 
-Aid given vs received, by neighbouring department, over time, with the net balance. Direction comes from the incident fields: a department named on the call (`aid_department_name`) is aid **given**; departments in `aid_received_names` are aid **received**. A few calls have both and count both ways. Mutual vs automatic aid is only recorded through 2025.
-
+Aid given vs received, by neighbouring department, over time, with the net balance. Direction comes from the incident fields: a department named on the call (`aid_department_name`) is aid **given**; departments in `aid_received_names` are aid **received**. A few calls have both and count both ways.
 ### Training Matrix (v1)
 
-The original yes/no grid: active members down the side and every in-house class (type 47174) in the date range across the top (default: Jan 1 to today). An **X** marks attendance, with totals per member and per class. It's simple and prints landscape. In-house classes begin in 2025, so earlier ranges are empty. See v2 for rates, make-ups and status.
+The original yes/no grid: active members down the side and every in-house class (the in-house training type set in the query) in the date range across the top (default: Jan 1 to today). An **X** marks attendance, with totals per member and per class. It's simple and prints landscape. See v2 for rates, make-ups and status.
 
 ### Training Matrix (v2)
 
-In-house training attendance (type 47174, which began January 2025), one column per **training night**: every in-house class held on the same date is grouped, so two classes in one night count once and attending either counts. Defaults to the last 12 months, with quick links for this year, last year and all.
+In-house training attendance (the in-house training type set in the query), one column per **training night**: every in-house class held on the same date is grouped, so two classes in one night count once and attending either counts. Defaults to the last 12 months, with quick links for this year, last year and all.
 
 - **Expected, not just present:** a member is expected only at nights after their start date (and before they left), and only at classes meant for their rank. Officer Development is officers-only, so others show *n/a* there and earn extra credit if they attend. Rates are attended / expected.
 - **Make-ups:** a class whose name matches "make up" credits the member's most recent missed night within 30 days (both cells show **M**).
@@ -225,7 +223,7 @@ Hours by category and topic, who has been reached, gaps by focus area, a member 
 
 ### Probationary Progress
 
-How new members ramp up. "Probationary" is defined as the first N months after the start date (`months`, default 12) because the personnel rank field is not used consistently. For each member who started in 2024 or later (including those who have left): response % and in-house training % over their window, compared with established active members over the **same calendar dates**, plus month-by-month ramp charts. Members who left are shown for comparison.
+How new members ramp up. "Probationary" is defined as the first N months after the start date (`months`, default 12) because the personnel rank field is not used consistently. For each member who started on or after the report's data floor (including those who have left): response % and in-house training % over their window, compared with established active members over the **same calendar dates**, plus month-by-month ramp charts. Members who left are shown for comparison.
 
 ### Response by Personnel
 
@@ -233,7 +231,7 @@ One row per active member for a date range:
 - **Incidents:** calls responded to, and their share of the department calls since the member started (tenure-adjusted).
 - **Training:** total hours and in-house hours, with in-house hours as a share of all in-house class hours offered since the member started.
 
-Personnel are recorded on incidents only from 2024, so earlier ranges show no responses.
+Responses are counted from the personnel recorded on each incident.
 
 ### Work Performance Stipend
 
@@ -251,7 +249,7 @@ Call and training figures match Response by Personnel. Every threshold, the inst
 
 Shows one member's incidents and training for a date range. Each category is totaled by year, then by calendar quarter, and each quarter expands to list the individual calls or classes.
 
-- Every figure reads `member/department` with the member's percentage share. Incidents compare against all department incidents; training percentage is the member's in-house hours ÷ all department in-house class hours. Only in-house classes (type 47174) count toward the percentage, since specialty courses not everyone takes would skew it; the member's other training is still listed and totaled.
+- Every figure reads `member/department` with the member's percentage share. Incidents compare against all department incidents; training percentage is the member's in-house hours ÷ all department in-house class hours. Only in-house classes (the in-house training type) count toward the percentage, since specialty courses not everyone takes would skew it; the member's other training is still listed and totaled.
 - Percentages are tenure-adjusted: department totals count only from the member's start date (or the report start date, whichever is later).
 - Quarters and incident times use `REPORT_TIMEZONE`.
 - Default view: Incidents show yearly totals, collapsed (expand a year for its quarters, a quarter for its calls). Training shows each year with its quarters beneath it; classes stay collapsed until you expand a quarter.
@@ -268,7 +266,7 @@ Answers "how is this member doing?" rather than listing every call. A raw percen
 - Fits on one printed page.
 
 How it is calculated:
-- Incident response % = incidents the member responded to ÷ all department incidents. Training % = in-house hours attended ÷ all in-house class hours (type 47174).
+- Incident response % = incidents the member responded to ÷ all department incidents. Training % = in-house hours attended ÷ all in-house class hours.
 - Both are tenure-adjusted: a member is measured only against activity on or after their start date.
 - The peer median is the middle value across the other active members, each measured the same way. Inactive members can still be selected; they are compared against active members.
 - Use Member Activity when you need the individual calls and classes behind the numbers.
@@ -311,7 +309,7 @@ For anything beyond a table, write a module in `views/` and register it:
 my_view: {
   title: 'My View', category: 'incidents', description: '…',
   type: 'view', view: 'my_view', badge: 'Analysis',
-  minDate: '2024-01-01',          // optional data floor
+  minDate: 'YYYY-MM-DD',          // optional data floor (earliest date the report allows)
   minDateNote: 'Why it starts then.',
   dataQuery: `SELECT … WHERE … BETWEEN $1::date AND $2::date`,
 },
