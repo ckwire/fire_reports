@@ -87,32 +87,37 @@ async function handle(req, res, report, ctx) {
     const attended = classes.filter(c => mine.has(String(c.id)) && c.class_date >= range.start && c.class_date >= (m.start_date || '0000'));
     const inhouse = attended.filter(c => c.is_inhouse);
     const totalHours = sum(attended, c => c.hours), inhouseHours = sum(inhouse, c => c.hours);
-    const inhousePct = totalHours > 0 ? inhouseHours / totalHours * 100 : null;
+    const inhousePct = totalHours > 0 ? inhouseHours / totalHours * 100 : null;          // in-house as a share of ALL the member's training (informational)
+    // In-house attendance: hours attended ÷ in-house hours offered since the member started (this is what the requirement judges)
+    const offerEnd = m.end_date && m.end_date < range.end ? m.end_date : range.end;
+    const offered = classes.filter(c => c.is_inhouse && c.class_date >= memberStart && c.class_date <= offerEnd);
+    const offeredHours = sum(offered, c => c.hours);
+    const inhouseAttPct = offeredHours > 0 ? inhouseHours / offeredHours * 100 : null;
     const spanDays = K.daysBetween(memberStart, range.end);
     let years = spanDays / 365.25; if (Math.abs(years - 1) < 0.01) years = 1;
     const reqHours = rules.training.minHoursPerYear * years;
     const lead = classes.filter(c => c.class_date >= range.start && instRows.some(i =>
       String(i.training_class_id) === String(c.id) && String(i.personnel_id) === String(m.personnel_id) && rules.training.leadTypes.includes(i.instructor_type)));
-    const c2 = totalHours >= reqHours && inhousePct !== null && inhousePct >= rules.training.minInhousePct;
+    const c2 = totalHours >= reqHours && inhouseAttPct !== null && inhouseAttPct >= rules.training.minInhousePct;
 
-    // --- Events: meetings (4) and extra duties (3) -----------------------------------------------------
+    // --- Events: meeting participation (4) -------------------------------------------------------------
+    // Special projects, committees and extra duties (3) are NOT taken from the activities log:
+    // the chief enters those, so that section is a manual Yes / No plus a notes box.
     const evRows = (await K.query(report, 'eventQuery', [range.start, range.end, m.user_id]))
       .filter(e => (!m.start_date || e.event_date >= m.start_date) && (!m.end_date || e.event_date <= m.end_date));
     const meetRows = rules.meetings.rows.map(r => ({ ...r, re: new RegExp(r.match, 'i'), held: 0, came: 0, hours: 0, list: [] }));
-    const extras = [];
     evRows.forEach(e => {
       const row = meetRows.find(r => r.re.test(e.name));
+      if (!row) return;                                   // not a meeting: ignored
       const hrs = e.paid_hours > 0 ? e.paid_hours : e.duration;
-      if (row) {
-        row.held++;
-        if (e.attended) { row.came++; row.hours += hrs; }
-        row.list.push(e);
-      } else if (e.attended) extras.push({ ...e, hours: hrs });
+      row.held++;
+      if (e.attended) { row.came++; row.hours += hrs; }
+      row.list.push(e);
     });
     const primary = meetRows.find(r => r.primary) || meetRows[0];
     const meetPct = primary.held ? primary.came / primary.held * 100 : null;
     const c4 = meetPct !== null && meetPct >= rules.meetings.minAttendPct;
-    const c3 = extras.length >= rules.extraDuties.minItems;
+    const c3 = false;                                     // chief decides (starts at No)
 
     // --- 5. Professional development & standards --------------------------------------------------------
     const offRes = rules.professional.officerTraining.map(p => new RegExp(p, 'i'));
@@ -142,7 +147,7 @@ async function handle(req, res, report, ctx) {
     const earnedShare = metCount / shares;
     const perCat = available ? available / shares : null;
 
-    const yn = c => `<span class="yn" data-cat="${c.n}" data-sug="${c.on ? 1 : 0}"><button type="button" class="y${c.on ? ' on' : ''}">Yes</button><button type="button" class="n${c.on ? '' : ' on'}">No</button><small class="chg">changed</small></span>`;
+    const yn = c => `<span class="yn" data-cat="${c.n}" data-sug="${c.on ? 1 : 0}"><button type="button" class="y${c.on ? ' on' : ''}">Yes</button><button type="button" class="n${c.on ? '' : ' on'}">No</button>${c.n === 3 ? '' : '<small class="chg">changed</small>'}</span>`;
     const sec = (c, req, inner, lead = '') => K.card(`<span class="sn">${c.n}</span> ${esc(c.name)}${req ? ` <span class="req">${req}</span>` : ''}${yn(c)}`, inner, { lead, cls: 'sec' });
 
     // --- Section bodies -------------------------------------------------------------------------------------
@@ -157,24 +162,24 @@ async function handle(req, res, report, ctx) {
 
     const trainBody = `<div class="pad">
       ${K.hBars([{ label: 'Training hours', sub: `requires ${K.fmtNum(reqHours)} h`, value: totalHours, display: `${K.fmtNum(totalHours)} h`, color: totalHours >= reqHours ? '#1d6b3a' : '#d98e04' }], { max: Math.max(reqHours, totalHours, 1) })}
-      ${K.hBars([{ label: 'In-house share', sub: `requires ${rules.training.minInhousePct}%+`, value: inhousePct || 0, display: K.fmtPct(inhousePct, 0), color: inhousePct !== null && inhousePct >= rules.training.minInhousePct ? '#1d6b3a' : '#d98e04' }], { max: 100 })}
+      ${K.hBars([{ label: 'In-house attendance', sub: `requires ${rules.training.minInhousePct}%+ of in-house offered`, value: inhouseAttPct || 0, display: K.fmtPct(inhouseAttPct, 0), color: inhouseAttPct !== null && inhouseAttPct >= rules.training.minInhousePct ? '#1d6b3a' : '#d98e04' }], { max: 100 })}
     </div>
     ${K.table({
       head: ['', { label: 'Hours', num: 1 }, { label: 'Classes', num: 1 }],
       rows: [
-        `<tr><th scope="row">Total training</th><td class="num strong">${K.fmtNum(totalHours)}</td><td class="num">${attended.length}</td></tr>`,
-        `<tr><th scope="row">In-house</th><td class="num">${K.fmtNum(inhouseHours)}</td><td class="num">${inhouse.length}</td></tr>`,
+        `<tr><th scope="row">Total training attended</th><td class="num strong">${K.fmtNum(totalHours)}</td><td class="num">${attended.length}</td></tr>`,
+        `<tr><th scope="row">In-house attended</th><td class="num strong">${K.fmtNum(inhouseHours)}</td><td class="num">${inhouse.length}</td></tr>`,
+        `<tr><th scope="row">In-house offered</th><td class="num">${K.fmtNum(offeredHours)}</td><td class="num">${offered.length}</td></tr>`,
+        `<tr class="basis"><th scope="row">In-house attendance <span class="tag">judged</span><br><small class="muted" style="font-weight:400">attended &divide; offered</small></th><td class="num strong">${K.fmtPct(inhouseAttPct)}</td><td class="num"></td></tr>`,
+        `<tr><th scope="row">In-house share of total training<br><small class="muted" style="font-weight:400">in-house attended &divide; all training attended</small></th><td class="num">${K.fmtPct(inhousePct)}</td><td class="num"></td></tr>`,
         `<tr><th scope="row">Outside the department</th><td class="num">${K.fmtNum(totalHours - inhouseHours)}</td><td class="num">${attended.length - inhouse.length}</td></tr>`,
         `<tr><th scope="row">Times as lead instructor</th><td class="num"></td><td class="num strong">${lead.length}</td></tr>`,
       ],
     })}
     ${lead.length ? `<details class="more"><summary>Classes led (${lead.length})</summary>${listTable(lead.map(c => [c.class_date, c.name, c.hours]))}</details>` : ''}`;
 
-    const extraBody = extras.length
-      ? `${listTable(extras.slice(0, 14).map(e => [e.event_date, e.name, e.hours]))}
-         ${extras.length > 14 ? `<details class="more"><summary>${extras.length - 14} more</summary>${listTable(extras.slice(14).map(e => [e.event_date, e.name, e.hours]))}</details>` : ''}
-         <p class="subtotal"><b>${extras.length}</b> event${extras.length === 1 ? '' : 's'} &middot; <b>${K.fmtNum(sum(extras, e => e.hours))}</b> hours</p>`
-      : '<p class="lead" style="padding:0 16px 14px">No projects, events or extra duties recorded for this member in the range.</p>';
+    // Entered by the chief; not in the data. Printed with the report.
+    const extraBody = '<textarea class="notes proj" rows="3" placeholder="Projects, committees or extra duties (entered by the chief)"></textarea>';
 
     const meetBody = K.table({
       head: ['Meeting', { label: 'Held', num: 1 }, { label: 'Attended', num: 1 }, { label: '%', num: 1 }, { label: 'Hours', num: 1 }],
@@ -205,13 +210,13 @@ async function handle(req, res, report, ctx) {
       <div><dt>Date prepared</dt><dd>${esc(K.fmtDate(range.today))}</dd></div>
       <div><dt>Total available stipend</dt><dd>${available ? money(available) : '<span class="muted noprint-hint">enter above</span>'}</dd></div>
     </dl>
-    <p class="lead" style="padding:8px 0 0">Each category contributes ${K.fmtNum(100 / shares)}% of the total stipend. Yes / No answers are suggested from the data; use the toggles to change them.</p></section>`;
+    <p class="lead" style="padding:8px 0 0">Each category contributes ${K.fmtNum(100 / shares)}% of the total stipend. Yes / No answers are suggested from the data (special projects start at No for the chief to set); use the toggles to change them.</p></section>`;
 
     const tiles = `<div class="tiles">
       ${K.tile({ title: 'Stipend earned', accent: true, value: `<span id="t-earned">${available ? money(available * earnedShare) : K.fmtPct(earnedShare * 100, 0)}</span>`, sub: [available ? `of ${money(available)} available` : 'enter the available amount to see dollars'] })}
       ${K.tile({ title: 'Categories met', value: `<span id="t-met">${metCount}</span> <small style="font-size:1rem;color:#777">/ ${shares}</small>`, sub: [`${K.fmtNum(100 / shares)}% each`] })}
       ${K.tile({ title: 'Call response', value: K.fmtPct(basis.pct), sub: [`${basis.label.toLowerCase()} &middot; needs ${rules.callResponse.minPct}%`] })}
-      ${K.tile({ title: 'Training', value: `${K.fmtNum(totalHours)} h`, sub: [`${K.fmtPct(inhousePct, 0)} in-house &middot; needs ${K.fmtNum(reqHours)} h`] })}
+      ${K.tile({ title: 'Training', value: `${K.fmtNum(totalHours)} h`, sub: [`${K.fmtPct(inhouseAttPct, 0)} of in-house attended (needs ${rules.training.minInhousePct}%)`, `needs ${K.fmtNum(reqHours)} h total`] })}
     </div>`;
 
     const summary = K.card('Total stipend earned', `
@@ -228,14 +233,14 @@ async function handle(req, res, report, ctx) {
 
     const body = `${head}${tiles}
       ${sec(cats[0], `${rules.callResponse.minPct}% response requirement`, callBody, 'Share of all department calls since the member started. Hours come from payroll time on incident responses.')}
-      ${sec(cats[1], `${rules.training.minHoursPerYear} hours with at least ${rules.training.minInhousePct}% in-house`, trainBody, years === 1 ? '' : `Requirement prorated to the review period (${K.fmtNum(years, 2)} years).`)}
-      ${sec(cats[2], '', extraBody, 'Events the member took part in that are not meetings (details from the events log).')}
+      ${sec(cats[1], `${rules.training.minHoursPerYear} hours, attending at least ${rules.training.minInhousePct}% of in-house`, trainBody, years === 1 ? '' : `Requirement prorated to the review period (${K.fmtNum(years, 2)} years).`)}
+      ${sec(cats[2], 'entered by the chief', extraBody, 'Not taken from the data (activities are not projects or committees). The chief records what applies and sets Yes or No.')}
       ${sec(cats[3], `at least ${rules.meetings.minAttendPct}% of ${esc(primary.label.toLowerCase())}s`, meetBody, 'From the events log. Meetings that are not recorded as events (for example Officers or Fire Board) show as none recorded.')}
       ${sec(cats[4], '', stdBody)}
       ${summary}${signoff}
       <p class="note"><strong>How this is worked out.</strong> Call response is the share of all department incidents (from the member's start date) that the member responded to, judged on the <em>${basis.label.toLowerCase()}</em>; the 6- and 12-month figures end on ${esc(K.fmtDate(range.end))}.
-        Training counts the scheduled hours of every class attended; "in-house" is the department's in-house type. Lead instructor counts classes where the member is listed as ${esc(rules.training.leadTypes.join(' / '))}.
-        Meetings and extra duties come from the events log; the rules, thresholds and which events count as which meeting are in <code>rules</code> under <code>stipend_review</code> in reports.js.
+        Training counts the scheduled hours of every class attended; "in-house" is the department's in-house type, and in-house attendance is the in-house hours the member attended &divide; the in-house hours offered since they started (the share of total training is shown for reference only). Lead instructor counts classes where the member is listed as ${esc(rules.training.leadTypes.join(' / '))}.
+        Meeting participation comes from the events log; special projects, committees and extra duties are not in the data, so the chief enters them and answers Yes / No (it starts at No). The rules, thresholds and which events count as which meeting are in <code>rules</code> under <code>stipend_review</code> in reports.js.
         "Good standing" is only a suggestion built from the metrics above, and "Uphold department values" is left for the chief. The Yes / No toggles are not saved: they reset when the page is reloaded.</p>`;
 
     const css = `${quickCss}

@@ -487,10 +487,11 @@ module.exports = {
       },
       training: {
         minHoursPerYear: 30,               // prorated to the date range
-        minInhousePct: 50,                 // at least this share of hours must be in-house
+        minInhousePct: 50,                 // must attend at least this % of the in-house hours offered (since they started)
         leadTypes: ['Lead / Primary'],     // instructor types that count as "lead instructor"
       },
-      extraDuties: { minItems: 1 },        // events/projects (outside meetings) needed to suggest "Yes"
+      // Special projects, committees and extra duties are entered by the chief (not derived from
+      // activities), so that category starts at "No" with a notes box.
       // Events are sorted into these rows by name (case-insensitive regex), first match wins.
       // Rows with no matching events show "not recorded". `primary` is the row the
       // Yes/No suggestion is judged on (attended share of meetings held).
